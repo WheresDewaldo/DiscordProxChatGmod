@@ -32,7 +32,7 @@ class Settings(BaseModel):
     PROX_DEAD_MUTE: bool = True
     PROX_DEAD_DEAFEN: bool = True
     # Optional: at round start, move mapped users (in voice) to Living channel
-    PROX_MOVE_TO_LIVING_ON_START: bool = True
+    PROX_MOVE_TO_LIVING_ON_START: bool = False
 
 
 def get_settings() -> Settings:

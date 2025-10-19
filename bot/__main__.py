@@ -280,6 +280,17 @@ class ProxBot(discord.Client):
                     await set_voice_policy(self.guild, uid, mute=False, deafen=False)
                 except Exception:
                     pass
+            # Fallback: also clear for anyone currently in the Dead channel, even if not mapped
+            try:
+                dead_ch = self.guild.get_channel(self.dead_channel)
+                if dead_ch and isinstance(dead_ch, discord.VoiceChannel):
+                    for m in list(dead_ch.members):
+                        try:
+                            await m.edit(mute=False, deafen=False, reason="ProxChat round end unmute")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             # Try to return users to Living channel if they are in voice somewhere
             for uid in list(self.steam_to_discord.values()):
                 await ensure_in_channel(self.guild, uid, self.living_channel)
