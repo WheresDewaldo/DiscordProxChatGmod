@@ -47,6 +47,11 @@ async def ensure_cluster_channels(
 ):
     # Channels the bot can see
     existing = [ch for ch in guild.voice_channels if ch.name.startswith(prefix)]
+    try:
+        names = ", ".join([f"{ch.name}({ch.id})" for ch in existing]) or "<none>"
+        print(f"[ProxBot] ensure_cluster_channels: found {len(existing)} existing for prefix '{prefix}': {names}")
+    except Exception:
+        pass
     # Create missing
     for i in range(len(existing) + 1, count + 1):
         name = f"{prefix}-{i}"
@@ -60,6 +65,10 @@ async def ensure_cluster_channels(
                 if cat and isinstance(cat, discord.CategoryChannel):
                     kwargs["category"] = cat
                     cat_ok = True
+                    try:
+                        print(f"[ProxBot] ensure_cluster_channels: using category '{cat.name}' ({category_id}) for '{name}'")
+                    except Exception:
+                        pass
                 else:
                     print(f"[ProxBot] WARN: PROX_CATEGORY_ID={category_id} does not resolve to a category; creating '{name}' at guild root.")
             except Exception:
@@ -82,6 +91,11 @@ async def ensure_cluster_channels(
     # Refresh list (only channels the bot can see)
     existing = [ch for ch in guild.voice_channels if ch.name.startswith(prefix)]
     existing.sort(key=lambda c: c.name)
+    try:
+        names = ", ".join([f"{ch.name}({ch.id})" for ch in existing]) or "<none>"
+        print(f"[ProxBot] ensure_cluster_channels: returning first {min(len(existing), count)}: {names}")
+    except Exception:
+        pass
     return existing[:count]
 
 
