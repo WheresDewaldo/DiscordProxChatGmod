@@ -40,12 +40,33 @@ class ProxBot(discord.Client):
         self._stable_count: Dict[int, int] = {}
         self._last_move_ts: Dict[int, float] = {}
         # Permission/cache flags
-        self._perm_warned: bool = False
-        self._can_manage_channels: bool = False
-        self._can_move_members: bool = False
-        self._can_mute_members: bool = False
+        self._perm_warned = False
+        self._can_manage_channels = False
+        self._can_move_members = False
+        self._can_mute_members = False
+        # Not-ready log rate limit
+        self._not_ready_last_log_ts = 0.0
         # Slash commands
         self.tree = app_commands.CommandTree(self)
+
+    def _refresh_perms(self) -> None:
+        try:
+            if not self._guild:
+                return
+            me = self.guild.me  # type: ignore
+            if not me:
+                return
+            perms = me.guild_permissions
+            before = (self._can_manage_channels, self._can_move_members, self._can_mute_members)
+            self._can_manage_channels = bool(perms.manage_channels)
+            self._can_move_members = bool(perms.move_members)
+            self._can_mute_members = bool(perms.mute_members or perms.deafen_members)
+            after = (self._can_manage_channels, self._can_move_members, self._can_mute_members)
+            # If permissions improved, clear warn flag so we can log future issues if they regress
+            if after > before and self._perm_warned and (self._can_manage_channels and self._can_move_members):
+                self._perm_warned = False
+        except Exception:
+            pass
 
     @property
     def guild(self) -> discord.Guild:
@@ -53,8 +74,33 @@ class ProxBot(discord.Client):
         return self._guild
 
     async def on_ready(self):
-        self._guild = self.get_guild(self.guild_id) or await self.fetch_guild(self.guild_id)
-        print(f"Logged in as {self.user} | guild={self.guild.name}")
+        print(f"Logged in as {self.user}")
+        # Try to resolve configured guild
+        try:
+            g = self.get_guild(self.guild_id)
+            if g is None:
+                g = await self.fetch_guild(self.guild_id)
+            self._guild = g
+            print(f"[ProxBot] Connected to guild={self.guild.name} ({self.guild.id})")
+        except Exception as e:
+            self._guild = None
+            print(
+                f"[ProxBot] Logged in but cannot access configured GUILD_ID={self.guild_id}: {e}. "
+                f"Ensure the bot is invited to that server and GUILD_ID is correct. Will retry."
+            )
+            # Start a background retry to obtain guild later
+            async def retry_guild():
+                while self.is_ready() and self._guild is None:
+                    try:
+                        g2 = self.get_guild(self.guild_id) or await self.fetch_guild(self.guild_id)
+                        if g2:
+                            self._guild = g2
+                            print(f"[ProxBot] Guild resolved after retry: {self.guild.name} ({self.guild.id})")
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(15)
+            asyncio.create_task(retry_guild())
         # Snapshot permissions for the bot member
         try:
             me = self.guild.me or await self.guild.fetch_member(self.user.id)  # type: ignore
@@ -201,11 +247,16 @@ class ProxBot(discord.Client):
         # For all other events, ignore until the Discord client is ready and guild is set
         if not getattr(self, "_guild", None):
             et = t if t is not None else "?"
-            print(f"[ProxBot] Received event '{et}' before bot ready; ignoring")
+            now_ts = time.time()
+            if now_ts - self._not_ready_last_log_ts >= 5.0:
+                print(f"[ProxBot] Received event '{et}' before bot ready; ignoring")
+                self._not_ready_last_log_ts = now_ts
             return
 
         # From here on, guild-dependent events
         t = t
+        # Refresh permissions to pick up mid-run role changes
+        self._refresh_perms()
         
         if t == "player_death":
             player = ev.get("player", {})
