@@ -6,11 +6,15 @@ from pathlib import Path
 from typing import Optional, Dict
 
 import discord
+from discord import app_commands
 
 from .config import get_settings
 from .http_server import create_app, run_server
 from .discord_actions import ensure_in_channel, set_voice_policy
 from .proximity import Pos, cluster_positions, ensure_cluster_channels, cleanup_cluster_channels
+from .store import load_mapping, save_mapping
+import secrets
+import time
 
 
 class ProxBot(discord.Client):
@@ -26,6 +30,7 @@ class ProxBot(discord.Client):
         self.dead_channel = dead_channel
         self._guild: Optional[discord.Guild] = None
         self.steam_to_discord: Dict[str, int] = {}
+        self._pending_codes: Dict[str, tuple[int, float]] = {}  # code -> (discord_id, expiry_ts)
         self.prox_radius = prox_radius
         self.max_clusters = max_clusters
         self.cluster_prefix = prefix
@@ -34,6 +39,8 @@ class ProxBot(discord.Client):
         self._last_cluster: Dict[int, int] = {}  # user_id -> cluster_index
         self._stable_count: Dict[int, int] = {}
         self._last_move_ts: Dict[int, float] = {}
+        # Slash commands
+        self.tree = app_commands.CommandTree(self)
 
     @property
     def guild(self) -> discord.Guild:
@@ -43,6 +50,62 @@ class ProxBot(discord.Client):
     async def on_ready(self):
         self._guild = self.get_guild(self.guild_id) or await self.fetch_guild(self.guild_id)
         print(f"Logged in as {self.user} | guild={self.guild.name}")
+        # Ensure slash commands are registered for this guild
+        try:
+            await self.tree.sync(guild=discord.Object(id=self.guild_id))
+        except Exception as e:
+            print(f"Slash command sync failed: {e}")
+
+    async def setup_hook(self) -> None:
+        # Define slash commands here so they bind to this instance
+        @self.tree.command(name="linksteam", description="Generate a one-time code to link your SteamID from in-game")
+        async def linksteam(interaction: discord.Interaction):
+            code = secrets.token_hex(3).upper()  # 6 hex chars
+            self._pending_codes[code] = (interaction.user.id, time.time() + 300)  # 5 minutes
+            msg = (
+                f"Your link code: {code}\n"
+                f"In Garry's Mod chat, type: !link {code}"
+            )
+            try:
+                await interaction.response.send_message(msg, ephemeral=True)
+            except Exception:
+                # Fallback DM if ephemeral fails
+                try:
+                    await interaction.user.send(msg)
+                except Exception:
+                    pass
+
+        @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)")
+        async def linked(interaction: discord.Interaction):
+            # Admin gate: require Manage Guild
+            perms = getattr(interaction.user, "guild_permissions", None)
+            if not perms or not perms.manage_guild:
+                await interaction.response.send_message(
+                    "You need the Manage Server permission to use this.", ephemeral=True
+                )
+                return
+            if not self.steam_to_discord:
+                await interaction.response.send_message("No links yet.", ephemeral=True)
+                return
+            # Build a compact list (limit to 50 entries inline)
+            items = list(self.steam_to_discord.items())
+            lines = []
+            limit = 50
+            for i, (steamid, uid) in enumerate(items[:limit], start=1):
+                lines.append(f"{i}. {steamid} -> <@{uid}>")
+            body = "\n".join(lines)
+            footer = ""
+            if len(items) > limit:
+                footer = f"\n… and {len(items) - limit} more."
+            try:
+                await interaction.response.send_message(
+                    f"Linked players ({len(items)} total):\n{body}{footer}", ephemeral=True
+                )
+            except Exception:
+                try:
+                    await interaction.user.send(f"Linked players ({len(items)} total):\n{body}{footer}")
+                except Exception:
+                    pass
 
     def load_mapping(self, mapping_file: Optional[str]):
         if not mapping_file:
@@ -50,20 +113,40 @@ class ProxBot(discord.Client):
         p = Path(mapping_file)
         if not p.exists():
             return
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            # expects { "steamid64": "discord_id" | number }
-            for k, v in data.items():
-                try:
-                    self.steam_to_discord[k] = int(v)
-                except Exception:
-                    continue
-            print(f"Loaded {len(self.steam_to_discord)} ID mappings from {mapping_file}")
-        except Exception as e:
-            print(f"Failed to load mapping file {mapping_file}: {e}")
+        self.steam_to_discord = load_mapping(str(p))
+        print(f"Loaded {len(self.steam_to_discord)} ID mappings from {mapping_file}")
+
+    def save_mapping(self, mapping_file: Optional[str]):
+        if not mapping_file:
+            return
+        save_mapping(mapping_file, self.steam_to_discord)
 
     async def handle_event(self, ev: dict):
         t = ev.get("type")
+        if t == "link_attempt":
+            code = ev.get("code")
+            player = ev.get("player", {})
+            steamid = player.get("steamid64")
+            if not code or not steamid:
+                return
+            entry = self._pending_codes.get(str(code))
+            if not entry:
+                return
+            discord_id, expiry = entry
+            if time.time() > expiry:
+                del self._pending_codes[str(code)]
+                return
+            # Link and persist
+            self.steam_to_discord[steamid] = discord_id
+            del self._pending_codes[str(code)]
+            self.save_mapping(get_settings().MAPPING_FILE)
+            # DM the user if possible
+            try:
+                user = await self.fetch_user(discord_id)
+                await user.send(f"Linked SteamID64 {steamid} to your Discord account.")
+            except Exception:
+                pass
+            return
         if t == "player_death":
             player = ev.get("player", {})
             steamid = player.get("steamid64")

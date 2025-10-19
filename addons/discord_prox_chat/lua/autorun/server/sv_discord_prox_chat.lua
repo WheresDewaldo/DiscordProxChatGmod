@@ -51,6 +51,17 @@ if SERVER then
         emit_event({ type = "player_death", ts = CurTime(), player = { steamid64 = victim:SteamID64() } })
     end)
 
+    -- In-game linking: user runs /linksteam in Discord to get a code, then types !link CODE in GMod chat
+    hook.Add("PlayerSay", "ProxChat_LinkSteam", function(ply, text)
+        if not IsValid(ply) or not ply.SteamID64 then return end
+        if not isstring(text) then return end
+        local trimmed = string.Trim(text)
+        local code = string.match(trimmed, "^!link%s+([A-Fa-f0-9]+)$")
+        if not code then return end
+        emit_event({ type = "link_attempt", ts = CurTime(), code = code, player = { steamid64 = ply:SteamID64() } })
+        return "" -- optionally hide the chat message
+    end)
+
     -- periodic position batching
     local accum = 0
     hook.Add("Think", "ProxChat_PosBatchThink", function()
