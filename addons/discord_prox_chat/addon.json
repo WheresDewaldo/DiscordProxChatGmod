@@ -1,0 +1,7 @@
+{
+  "name": "Discord Proximity Chat Bridge",
+  "author": "You",
+  "version": "0.1.0",
+  "description": "TTT events to Discord proximity chat bot via HTTP",
+  "type": "server"
+}

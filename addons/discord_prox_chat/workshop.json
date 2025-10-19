@@ -1,0 +1,10 @@
+{
+  "title": "Discord Proximity Chat Bridge (TTT)",
+  "type": "servercontent",
+  "tags": ["roleplay", "fun", "TTT"],
+  "ignore": [
+    "*.psd",
+    "*.md",
+    "*.txt"
+  ]
+}
