@@ -73,14 +73,8 @@ class ProxBot(discord.Client):
                 except Exception:
                     pass
 
-    @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)", guild=guild_obj)
+        @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)", guild=guild_obj)
         async def linked(interaction: discord.Interaction):
-        # Sync commands to this guild for instant availability
-        try:
-            synced = await self.tree.sync(guild=guild_obj)
-            print(f"Synced {len(synced)} app commands to guild {self.guild_id}")
-        except Exception as e:
-            print(f"Slash command sync failed: {e}")
             # Admin gate: require Manage Guild
             perms = getattr(interaction.user, "guild_permissions", None)
             if not perms or not perms.manage_guild:
@@ -110,6 +104,13 @@ class ProxBot(discord.Client):
                     await interaction.user.send(f"Linked players ({len(items)} total):\n{body}{footer}")
                 except Exception:
                     pass
+
+        # Sync commands to this guild for instant availability
+        try:
+            synced = await self.tree.sync(guild=guild_obj)
+            print(f"Synced {len(synced)} app commands to guild {self.guild_id}")
+        except Exception as e:
+            print(f"Slash command sync failed: {e}")
 
     def load_mapping(self, mapping_file: Optional[str]):
         if not mapping_file:
