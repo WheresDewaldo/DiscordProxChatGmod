@@ -58,52 +58,66 @@ class ProxBot(discord.Client):
 
         @self.tree.command(name="linksteam", description="Generate a one-time code to link your SteamID from in-game", guild=guild_obj)
         async def linksteam(interaction: discord.Interaction):
-            code = secrets.token_hex(3).upper()  # 6 hex chars
-            self._pending_codes[code] = (interaction.user.id, time.time() + 300)  # 5 minutes
-            msg = (
-                f"Your link code: {code}\n"
-                f"In Garry's Mod chat, type: !link {code}"
-            )
+            # Immediate ack to avoid 3s timeout
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
             try:
-                await interaction.response.send_message(msg, ephemeral=True)
-            except Exception:
-                # Fallback DM if ephemeral fails
+                code = secrets.token_hex(3).upper()  # 6 hex chars
+                self._pending_codes[code] = (interaction.user.id, time.time() + 300)  # 5 minutes
+                msg = (
+                    f"Your link code: {code}\n"
+                    f"In Garry's Mod chat, type: !link {code}"
+                )
+                await interaction.edit_original_response(content=msg)
+            except Exception as e:
+                print(f"/linksteam error: {e}")
+                # Fallback DM in case followup fails
                 try:
-                    await interaction.user.send(msg)
+                    await interaction.user.send("Here's your link code via DM: " + msg)
                 except Exception:
                     pass
 
         @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)", guild=guild_obj)
         async def linked(interaction: discord.Interaction):
-            # Admin gate: require Manage Guild
-            perms = getattr(interaction.user, "guild_permissions", None)
-            if not perms or not perms.manage_guild:
-                await interaction.response.send_message(
-                    "You need the Manage Server permission to use this.", ephemeral=True
-                )
-                return
-            if not self.steam_to_discord:
-                await interaction.response.send_message("No links yet.", ephemeral=True)
-                return
-            # Build a compact list (limit to 50 entries inline)
-            items = list(self.steam_to_discord.items())
-            lines = []
-            limit = 50
-            for i, (steamid, uid) in enumerate(items[:limit], start=1):
-                lines.append(f"{i}. {steamid} -> <@{uid}>")
-            body = "\n".join(lines)
-            footer = ""
-            if len(items) > limit:
-                footer = f"\n… and {len(items) - limit} more."
+            # Immediate ack to avoid 3s timeout
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
             try:
-                await interaction.response.send_message(
-                    f"Linked players ({len(items)} total):\n{body}{footer}", ephemeral=True
-                )
-            except Exception:
+                # Admin gate: require Manage Guild
+                perms = getattr(interaction.user, "guild_permissions", None)
+                if not perms or not perms.manage_guild:
+                    await interaction.edit_original_response(content="You need the Manage Server permission to use this.")
+                    return
+                if not self.steam_to_discord:
+                    await interaction.edit_original_response(content="No links yet.")
+                    return
+                # Build a compact list (limit to 50 entries inline)
+                items = list(self.steam_to_discord.items())
+                lines = []
+                limit = 50
+                for i, (steamid, uid) in enumerate(items[:limit], start=1):
+                    lines.append(f"{i}. {steamid} -> <@{uid}>")
+                body = "\n".join(lines)
+                footer = ""
+                if len(items) > limit:
+                    footer = f"\n… and {len(items) - limit} more."
+                await interaction.edit_original_response(content=f"Linked players ({len(items)} total):\n{body}{footer}")
+            except Exception as e:
+                print(f"/linked error: {e}")
                 try:
-                    await interaction.user.send(f"Linked players ({len(items)} total):\n{body}{footer}")
+                    await interaction.user.send("An error occurred while listing links. Try again later.")
                 except Exception:
                     pass
+
+        @self.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+            print(f"App command error: {error}")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+                await interaction.edit_original_response(content="Sorry, something went wrong handling that command.")
+            except Exception:
+                pass
 
         # Sync commands to this guild for instant availability
         try:
