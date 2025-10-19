@@ -221,7 +221,8 @@ if SERVER then
             end
             if isSpec then
                 ply:ConCommand("ttt_spectate 0")
-                print(string.format("[ProxChat] Auto-unspect applied to %s (%s)", ply:Nick(), ply:SteamID64 and ply:SteamID64() or "?"))
+                -- Note: use dot for existence check and colon for invocation; wrap in parens for precedence
+                print(string.format("[ProxChat] Auto-unspect applied to %s (%s)", ply:Nick(), (ply.SteamID64 and ply:SteamID64()) or "?"))
             end
         end)
     end)
