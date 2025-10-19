@@ -263,6 +263,7 @@ class ProxBot(discord.Client):
             steamid = player.get("steamid64")
             if steamid and steamid in self.steam_to_discord:
                 uid = self.steam_to_discord[steamid]
+                print(f"[ProxBot] player_death for steamid={steamid} mapped uid={uid}")
                 # Move to Dead channel and optionally deafen
                 await ensure_in_channel(self.guild, uid, self.dead_channel, mute=None, deafen=None)
         elif t == "round_end":
@@ -281,6 +282,7 @@ class ProxBot(discord.Client):
                 return
             # Build a map of discord user -> last position
             positions = ev.get("positions") or []
+            print(f"[ProxBot] player_pos_batch received with {len(positions)} positions")
             pts: Dict[int, Pos] = {}
             for item in positions:
                 p = item.get("player", {})
@@ -290,10 +292,18 @@ class ProxBot(discord.Client):
                 uid = self.steam_to_discord.get(sid)
                 if not uid:
                     continue
+                # Only track users who are in the guild (may not be in voice yet)
+                member = self.guild.get_member(uid)
+                if not member:
+                    continue
+                if not (member.voice and member.voice.channel):
+                    # Not in voice; clustering won't move them. Skip but log at low frequency is excessive; keep quiet here.
+                    continue
                 pos = item.get("pos") or {}
                 pts[uid] = Pos(float(pos.get("x", 0)), float(pos.get("y", 0)), float(pos.get("z", 0)))
 
             if not pts:
+                # Nothing to do because no mapped users currently in voice
                 return
 
             clusters = cluster_positions(pts, self.prox_radius, self.max_clusters)
@@ -307,6 +317,7 @@ class ProxBot(discord.Client):
                     self._perm_warned = True
                 return
             try:
+                print(f"[ProxBot] Ensuring {len(clusters)} cluster channels with prefix '{self.cluster_prefix}'")
                 channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
             except Exception as e:
                 if not self._perm_warned:
@@ -341,6 +352,7 @@ class ProxBot(discord.Client):
                                 print("[ProxBot] Missing 'Move Members' permission; cannot move users between channels.")
                                 self._perm_warned = True
                             continue
+                        print(f"[ProxBot] Moving uid={uid} to {channels[cidx].name}")
                         await ensure_in_channel(self.guild, uid, channels[cidx].id)
                         self._last_move_ts[uid] = now
         else:

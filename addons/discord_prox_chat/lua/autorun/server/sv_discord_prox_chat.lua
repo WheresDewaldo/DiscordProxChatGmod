@@ -3,6 +3,8 @@ if SERVER then
     CreateConVar("proxchat_bridge_url", "http://127.0.0.1:8085", FCVAR_ARCHIVE, "Base URL for the proximity chat bridge")
     CreateConVar("proxchat_bridge_secret", "", FCVAR_ARCHIVE, "Shared secret for the proximity chat bridge")
     CreateConVar("proxchat_pos_hz", "2", FCVAR_ARCHIVE, "Position batch frequency in Hz (2-5 recommended)")
+    CreateConVar("proxchat_include_spectators", "0", FCVAR_ARCHIVE, "When enabled, include spectators in position batches (for testing)")
+    CreateConVar("proxchat_autounspect", "0", FCVAR_ARCHIVE, "If enabled, auto-clear spectator-only for new players so rounds can start")
     CreateConVar("proxchat_enabled", "1", FCVAR_ARCHIVE, "Enable/disable ProxChat addon hooks without unloading")
 
     util.AddNetworkString("proxchat_debug")
@@ -183,17 +185,44 @@ if SERVER then
         accum = 0
         local positions = {}
         for _, ply in ipairs(player.GetAll()) do
-            if IsValid(ply) and ply:IsFullyAuthenticated() and ply:Alive() then
-                local pos = ply:GetPos()
-                table.insert(positions, {
-                    player = { steamid64 = ply:SteamID64() },
-                    pos = { x = pos.x, y = pos.y, z = pos.z },
-                    ts = CurTime(),
-                })
+            if not IsValid(ply) or not ply:IsFullyAuthenticated() then
+                -- skip invalid or unauthenticated players
+            else
+                local include_spect = GetConVar("proxchat_include_spectators"):GetBool()
+                if not include_spect and not ply:Alive() then
+                    -- skip spectators unless explicitly enabled
+                else
+                    local pos = ply:GetPos()
+                    table.insert(positions, {
+                        player = { steamid64 = ply:SteamID64() },
+                        pos = { x = pos.x, y = pos.y, z = pos.z },
+                        ts = CurTime(),
+                    })
+                end
             end
         end
         if #positions > 0 then
             emit_event({ type = "player_pos_batch", positions = positions })
         end
+    end)
+
+    -- Optional: auto-clear spectator-only for new players (does not run unless enabled)
+    hook.Add("PlayerInitialSpawn", "ProxChat_AutoUnspect", function(ply)
+        local cv = GetConVar("proxchat_autounspect")
+        if not cv or not cv:GetBool() then return end
+        if not IsValid(ply) then return end
+        -- Delay slightly to let TTT initialize player state
+        timer.Simple(2, function()
+            if not IsValid(ply) then return end
+            local isSpec = false
+            if ply.IsSpec then
+                local ok, val = pcall(function() return ply:IsSpec() end)
+                isSpec = ok and val == true
+            end
+            if isSpec then
+                ply:ConCommand("ttt_spectate 0")
+                print(string.format("[ProxChat] Auto-unspect applied to %s (%s)", ply:Nick(), ply:SteamID64 and ply:SteamID64() or "?"))
+            end
+        end)
     end)
 end
