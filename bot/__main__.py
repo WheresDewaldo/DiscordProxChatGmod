@@ -273,13 +273,26 @@ class ProxBot(discord.Client):
                     deafen=get_settings().PROX_DEAD_DEAFEN,
                 )
         elif t == "round_end":
-            # Return all mapped users to the Living channel and clear deaf/mute
+            print("[ProxBot] round_end: returning mapped users to Living and clearing mute/deafen")
+            # Clear mute/deafen regardless of move ability
             for uid in list(self.steam_to_discord.values()):
-                await ensure_in_channel(self.guild, uid, self.living_channel, mute=False, deafen=False)
+                try:
+                    await set_voice_policy(self.guild, uid, mute=False, deafen=False)
+                except Exception:
+                    pass
+            # Try to return users to Living channel if they are in voice somewhere
+            for uid in list(self.steam_to_discord.values()):
+                await ensure_in_channel(self.guild, uid, self.living_channel)
             # Optional cleanup of empty cluster channels
-            if self._can_manage_channels:
-                await cleanup_cluster_channels(self.guild, self.cluster_prefix)
+            from .config import get_settings
+            if self._can_manage_channels and get_settings().PROX_CLEANUP_CLUSTERS:
+                print("[ProxBot] round_end: cleaning up empty cluster channels")
+                try:
+                    await cleanup_cluster_channels(self.guild, self.cluster_prefix, category_id=self.cluster_category_id)
+                except Exception as e:
+                    print(f"[ProxBot] Cleanup error: {e}")
         elif t == "round_start":
+            print("[ProxBot] round_start: normalizing users to Living")
             # Optional: move mapped users that are already in voice to Living (normalize state)
             if get_settings().PROX_MOVE_TO_LIVING_ON_START:
                 for uid in list(self.steam_to_discord.values()):

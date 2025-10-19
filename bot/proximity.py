@@ -85,10 +85,19 @@ async def ensure_cluster_channels(
     return existing[:count]
 
 
-async def cleanup_cluster_channels(guild, prefix: str):
+async def cleanup_cluster_channels(guild, prefix: str, *, category_id: int | None = None, exclude_ids: set[int] | None = None):
+    # Only delete empty channels with our prefix, optionally scoped to a category, and not in the exclude list
+    exclude_ids = exclude_ids or set()
     for ch in list(guild.voice_channels):
-        if ch.name.startswith(prefix) and len(ch.members) == 0:
+        if not ch.name.startswith(prefix):
+            continue
+        if ch.id in exclude_ids:
+            continue
+        if category_id is not None and getattr(ch, "category_id", None) != category_id:
+            continue
+        if len(ch.members) == 0:
             try:
                 await ch.delete(reason="ProxChat cleanup")
-            except Exception:
-                pass
+                print(f"[ProxBot] Deleted empty cluster channel '{ch.name}' (id={ch.id})")
+            except Exception as e:
+                print(f"[ProxBot] WARN: Failed to delete cluster channel '{ch.name}': {e}")

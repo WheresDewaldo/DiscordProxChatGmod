@@ -25,6 +25,8 @@ class Settings(BaseModel):
     PROX_CATEGORY_ID: int | None = None  # Optional voice category to place cluster channels
     PROX_STABILITY_BATCHES: int = 3  # require N consecutive batches in same cluster before move
     PROX_MIN_MOVE_INTERVAL_SEC: float = 5.0  # per-user min interval between moves
+    # Cleanup policy: whether to delete empty cluster channels on round_end
+    PROX_CLEANUP_CLUSTERS: bool = False
 
     # Death handling
     PROX_DEAD_MUTE: bool = True
