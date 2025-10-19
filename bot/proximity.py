@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import asyncio
+import time
 from typing import Dict, List, Tuple
 
 
@@ -55,10 +55,25 @@ async def ensure_cluster_channels(
         pass
     # Deterministically ensure names prefix-1..prefix-count exist
     existing_by_name = {ch.name: ch for ch in existing}
+    # Basic backoff to avoid hammering Discord create endpoint
+    if not hasattr(ensure_cluster_channels, "_last_attempt"):
+        ensure_cluster_channels._last_attempt = {}  # type: ignore[attr-defined]
+    last_attempt = ensure_cluster_channels._last_attempt  # type: ignore[attr-defined]
+
     for i in range(1, count + 1):
         name = f"{prefix}-{i}"
         if name in existing_by_name:
             continue
+        # Skip if attempted very recently (within 15s)
+        now = time.time()
+        last = last_attempt.get(name, 0)
+        if now - last < 15:
+            try:
+                print(f"[ProxBot] ensure_cluster_channels: skipping create for '{name}' (last attempt {int(now-last)}s ago)")
+            except Exception:
+                pass
+            continue
+        last_attempt[name] = now
         try:
             print(f"[ProxBot] ensure_cluster_channels: creating missing '{name}' (target count={count}, have={len(existing_by_name)})")
         except Exception:
@@ -82,26 +97,16 @@ async def ensure_cluster_channels(
             except Exception:
                 pass
         try:
-            async def _create():
-                return await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
-            ch = await asyncio.wait_for(_create(), timeout=5.0)
+            ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
             print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
             existing_by_name[name] = ch
-        except asyncio.TimeoutError:
-            print(f"[ProxBot] ERROR: Timed out creating cluster channel '{name}'")
-            break
         except Exception as e:
             # Fallback: try without category
             if kwargs:
                 try:
-                    async def _create2():
-                        return await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
-                    ch = await asyncio.wait_for(_create2(), timeout=5.0)
+                    ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
                     print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
                     existing_by_name[name] = ch
-                except asyncio.TimeoutError:
-                    print(f"[ProxBot] ERROR: Timed out creating cluster channel '{name}' (fallback)")
-                    break
                 except Exception as e2:
                     print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
                     break
