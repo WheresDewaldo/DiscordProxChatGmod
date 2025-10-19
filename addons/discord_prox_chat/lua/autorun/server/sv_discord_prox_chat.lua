@@ -1,5 +1,5 @@
 if SERVER then
-    CreateConVar("proxchat_bridge_url", "http://127.0.0.1:8080", FCVAR_ARCHIVE, "Base URL for the proximity chat bridge")
+    CreateConVar("proxchat_bridge_url", "http://127.0.0.1:8085", FCVAR_ARCHIVE, "Base URL for the proximity chat bridge")
     CreateConVar("proxchat_bridge_secret", "", FCVAR_ARCHIVE, "Shared secret for the proximity chat bridge")
     CreateConVar("proxchat_pos_hz", "2", FCVAR_ARCHIVE, "Position batch frequency in Hz (2-5 recommended)")
 
@@ -56,10 +56,18 @@ if SERVER then
         if not IsValid(ply) or not ply.SteamID64 then return end
         if not isstring(text) then return end
         local trimmed = string.Trim(text)
-        local code = string.match(trimmed, "^!link%s+([A-Fa-f0-9]+)$")
-        if not code then return end
+        -- Accept a variety of styles: !link CODE, !link <CODE>, extra spaces ok
+        local raw = string.match(trimmed, "^!link%s+<?([^%s>]+)>?%s*$")
+        if not raw then return end
+        local code = string.upper(string.Trim(raw))
+        -- Validate hex-only (our codes are 6 hex chars)
+        if not string.match(code, "^[A-F0-9]+$") then
+            ply:ChatPrint("[ProxChat] Invalid code format. Use /linksteam in Discord to get a code, then type !link CODE here.")
+            return "" -- suppress echo
+        end
         emit_event({ type = "link_attempt", ts = CurTime(), code = code, player = { steamid64 = ply:SteamID64() } })
-        return "" -- optionally hide the chat message
+        ply:ChatPrint("[ProxChat] Link code sent. If successful, you'll get a DM in Discord.")
+        return "" -- always hide the chat message
     end)
 
     -- periodic position batching
