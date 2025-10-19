@@ -45,18 +45,42 @@ def cluster_positions(
 async def ensure_cluster_channels(
     guild, prefix: str, category_id: int | None, count: int
 ):
+    # Channels the bot can see
     existing = [ch for ch in guild.voice_channels if ch.name.startswith(prefix)]
     # Create missing
     for i in range(len(existing) + 1, count + 1):
+        name = f"{prefix}-{i}"
         kwargs = {}
+        cat_ok = False
         if category_id:
             cat = guild.get_channel(category_id)
-            if cat:
-                kwargs["category"] = cat
-        await guild.create_voice_channel(f"{prefix}-{i}", **kwargs, reason="ProxChat create cluster")
-    # Refresh list
+            # Only attach if it's a category the bot can access
+            try:
+                import discord  # type: ignore
+                if cat and isinstance(cat, discord.CategoryChannel):
+                    kwargs["category"] = cat
+                    cat_ok = True
+                else:
+                    print(f"[ProxBot] WARN: PROX_CATEGORY_ID={category_id} does not resolve to a category; creating '{name}' at guild root.")
+            except Exception:
+                pass
+        try:
+            ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
+            print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
+        except Exception as e:
+            # Fallback: try without category
+            if kwargs:
+                try:
+                    ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
+                    print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
+                except Exception as e2:
+                    print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
+                    break
+            else:
+                print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e}")
+                break
+    # Refresh list (only channels the bot can see)
     existing = [ch for ch in guild.voice_channels if ch.name.startswith(prefix)]
-    # Return the first 'count' channels in deterministic order
     existing.sort(key=lambda c: c.name)
     return existing[:count]
 
