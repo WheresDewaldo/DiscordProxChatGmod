@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 from typing import Dict, List, Tuple
 
 
@@ -81,16 +82,26 @@ async def ensure_cluster_channels(
             except Exception:
                 pass
         try:
-            ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
+            async def _create():
+                return await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
+            ch = await asyncio.wait_for(_create(), timeout=5.0)
             print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
             existing_by_name[name] = ch
+        except asyncio.TimeoutError:
+            print(f"[ProxBot] ERROR: Timed out creating cluster channel '{name}'")
+            break
         except Exception as e:
             # Fallback: try without category
             if kwargs:
                 try:
-                    ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
+                    async def _create2():
+                        return await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
+                    ch = await asyncio.wait_for(_create2(), timeout=5.0)
                     print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
                     existing_by_name[name] = ch
+                except asyncio.TimeoutError:
+                    print(f"[ProxBot] ERROR: Timed out creating cluster channel '{name}' (fallback)")
+                    break
                 except Exception as e2:
                     print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
                     break
