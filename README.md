@@ -29,7 +29,17 @@ python -m bot
 ## Config
 - Env vars: `DISCORD_TOKEN, GUILD_ID, LIVING_CHANNEL_ID, DEAD_CHANNEL_ID, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_SECRET`.
 - Optional mapping file under `config/mapping.json` for SteamID64 -> Discord user ID.
- - Proximity tuning: `PROX_RADIUS` (default 800 units), `PROX_MAX_CLUSTERS` (default 10), `PROX_CHANNEL_PREFIX` (default `Cluster`), optional `PROX_CATEGORY_ID` to contain channels.
+- Proximity tuning: `PROX_ENABLE_CLUSTERING` (default `true`), `PROX_RADIUS` (default 800 units), `PROX_MAX_CLUSTERS` (default 10), `PROX_CHANNEL_PREFIX` (default `Cluster`), optional `PROX_CATEGORY_ID` to contain channels.
+
+### Discord permissions required
+Give the bot role these permissions and place it above members it should manage:
+- Manage Channels — create/delete proximity channels and cleanup.
+- Move Members — move users between voice channels.
+- Mute Members and Deafen Members — for server mute/deafen policies (optional).
+
+Also ensure channel/category overrides permit the bot to View, Connect, and Move Members in the Living/Dead channels and the proximity category.
+
+Tip: if you’re still setting up permissions, set `PROX_ENABLE_CLUSTERING=false` and restart the bot to pause clustering moves.
 
 ### AMP (CubeCoders) notes
 - Run the Python bot as a custom service under AMP on the same host as the GMod instance or reachable via network.

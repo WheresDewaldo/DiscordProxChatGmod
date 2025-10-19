@@ -18,6 +18,7 @@ class Settings(BaseModel):
     MAPPING_FILE: str | None = None
 
     # Proximity behavior
+    PROX_ENABLE_CLUSTERING: bool = True
     PROX_RADIUS: float = 800.0  # Source engine units (~800 ~= ~66 ft)
     PROX_MAX_CLUSTERS: int = 10
     PROX_CHANNEL_PREFIX: str = "Cluster"

@@ -39,6 +39,11 @@ class ProxBot(discord.Client):
         self._last_cluster: Dict[int, int] = {}  # user_id -> cluster_index
         self._stable_count: Dict[int, int] = {}
         self._last_move_ts: Dict[int, float] = {}
+        # Permission/cache flags
+        self._perm_warned: bool = False
+        self._can_manage_channels: bool = False
+        self._can_move_members: bool = False
+        self._can_mute_members: bool = False
         # Slash commands
         self.tree = app_commands.CommandTree(self)
 
@@ -50,6 +55,20 @@ class ProxBot(discord.Client):
     async def on_ready(self):
         self._guild = self.get_guild(self.guild_id) or await self.fetch_guild(self.guild_id)
         print(f"Logged in as {self.user} | guild={self.guild.name}")
+        # Snapshot permissions for the bot member
+        try:
+            me = self.guild.me or await self.guild.fetch_member(self.user.id)  # type: ignore
+            perms = me.guild_permissions if me else None
+            if perms:
+                self._can_manage_channels = bool(perms.manage_channels)
+                self._can_move_members = bool(perms.move_members)
+                self._can_mute_members = bool(perms.mute_members or perms.deafen_members)
+                print(
+                    f"[ProxBot] Bot perms: manage_channels={self._can_manage_channels} "
+                    f"move_members={self._can_move_members} mute/deafen={self._can_mute_members}"
+                )
+        except Exception:
+            pass
         # Ready
 
     async def setup_hook(self) -> None:
@@ -200,11 +219,15 @@ class ProxBot(discord.Client):
             for uid in list(self.steam_to_discord.values()):
                 await ensure_in_channel(self.guild, uid, self.living_channel, mute=False, deafen=False)
             # Optional cleanup of empty cluster channels
-            await cleanup_cluster_channels(self.guild, self.cluster_prefix)
+            if self._can_manage_channels:
+                await cleanup_cluster_channels(self.guild, self.cluster_prefix)
         elif t == "round_start":
             # Optional: reset state
             pass
         elif t == "player_pos_batch":
+            # Respect config toggle
+            if not get_settings().PROX_ENABLE_CLUSTERING:
+                return
             # Build a map of discord user -> last position
             positions = ev.get("positions") or []
             pts: Dict[int, Pos] = {}
@@ -226,8 +249,19 @@ class ProxBot(discord.Client):
             if not clusters:
                 return
 
-            # Ensure enough cluster channels exist
-            channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
+            # Ensure enough cluster channels exist (requires Manage Channels)
+            if not self._can_manage_channels:
+                if not self._perm_warned:
+                    print("[ProxBot] Missing 'Manage Channels' permission; clustering disabled.")
+                    self._perm_warned = True
+                return
+            try:
+                channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
+            except Exception as e:
+                if not self._perm_warned:
+                    print(f"[ProxBot] Could not create/ensure cluster channels: {e}")
+                    self._perm_warned = True
+                return
 
             # Build reverse lookup: user -> cluster_index
             user_to_cluster: Dict[int, int] = {}
@@ -251,6 +285,11 @@ class ProxBot(discord.Client):
                 last_move = self._last_move_ts.get(uid, 0.0)
                 if self._stable_count[uid] >= stability_needed and (now - last_move) >= min_interval:
                     if cidx < len(channels):
+                        if not self._can_move_members:
+                            if not self._perm_warned:
+                                print("[ProxBot] Missing 'Move Members' permission; cannot move users between channels.")
+                                self._perm_warned = True
+                            continue
                         await ensure_in_channel(self.guild, uid, channels[cidx].id)
                         self._last_move_ts[uid] = now
         else:
