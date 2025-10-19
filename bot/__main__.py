@@ -50,15 +50,13 @@ class ProxBot(discord.Client):
     async def on_ready(self):
         self._guild = self.get_guild(self.guild_id) or await self.fetch_guild(self.guild_id)
         print(f"Logged in as {self.user} | guild={self.guild.name}")
-        # Ensure slash commands are registered for this guild
-        try:
-            await self.tree.sync(guild=discord.Object(id=self.guild_id))
-        except Exception as e:
-            print(f"Slash command sync failed: {e}")
+        # Ready
 
     async def setup_hook(self) -> None:
         # Define slash commands here so they bind to this instance
-        @self.tree.command(name="linksteam", description="Generate a one-time code to link your SteamID from in-game")
+        guild_obj = discord.Object(id=self.guild_id)
+
+        @self.tree.command(name="linksteam", description="Generate a one-time code to link your SteamID from in-game", guild=guild_obj)
         async def linksteam(interaction: discord.Interaction):
             code = secrets.token_hex(3).upper()  # 6 hex chars
             self._pending_codes[code] = (interaction.user.id, time.time() + 300)  # 5 minutes
@@ -75,8 +73,14 @@ class ProxBot(discord.Client):
                 except Exception:
                     pass
 
-        @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)")
+    @self.tree.command(name="linked", description="List currently linked SteamIDs (admin only)", guild=guild_obj)
         async def linked(interaction: discord.Interaction):
+        # Sync commands to this guild for instant availability
+        try:
+            synced = await self.tree.sync(guild=guild_obj)
+            print(f"Synced {len(synced)} app commands to guild {self.guild_id}")
+        except Exception as e:
+            print(f"Slash command sync failed: {e}")
             # Admin gate: require Manage Guild
             perms = getattr(interaction.user, "guild_permissions", None)
             if not perms or not perms.manage_guild:
