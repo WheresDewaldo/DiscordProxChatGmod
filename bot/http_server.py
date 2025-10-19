@@ -22,6 +22,15 @@ def create_app(secret: str, on_event: Callable[[dict], Awaitable[None]]) -> web.
         except Exception:
             return web.json_response({"error": "invalid_json"}, status=400)
         try:
+            etype = payload.get("type")
+            if etype == "link_attempt":
+                player = payload.get("player", {})
+                sid = player.get("steamid64")
+                code = payload.get("code")
+                print(f"[Bridge] Received link_attempt: steamid={sid} code={code}")
+        except Exception:
+            pass
+        try:
             await on_event(payload)
             return web.json_response({"ok": True})
         except Exception as e:

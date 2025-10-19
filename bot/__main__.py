@@ -141,39 +141,53 @@ class ProxBot(discord.Client):
         save_mapping(mapping_file, self.steam_to_discord)
 
     async def handle_event(self, ev: dict):
-        # Ignore events until the Discord client is ready and guild is set
-        if not getattr(self, "_guild", None):
+        # Determine event type early
+        t = ev.get("type")
+        # Process linking even before guild is ready (doesn't require guild)
+        if t == "link_attempt":
             try:
-                et = ev.get("type")
-            except Exception:
-                et = "?"
+                code_raw = ev.get("code")
+                player = ev.get("player", {})
+                steamid = player.get("steamid64")
+                code = str(code_raw).strip().upper() if code_raw is not None else None
+                if not code or not steamid:
+                    print(f"[Link] Invalid link_attempt payload: code={code_raw!r} steamid={steamid!r}")
+                    return
+                entry = self._pending_codes.get(code)
+                if not entry:
+                    print(f"[Link] Code not found: {code} from steamid {steamid}")
+                    return
+                discord_id, expiry = entry
+                now_ts = time.time()
+                if now_ts > expiry:
+                    print(f"[Link] Code expired: {code} for discord {discord_id}")
+                    del self._pending_codes[code]
+                    return
+                # Link and persist
+                self.steam_to_discord[str(steamid)] = int(discord_id)
+                del self._pending_codes[code]
+                self.save_mapping(get_settings().MAPPING_FILE)
+                print(f"[Link] Linked steamid {steamid} -> discord {discord_id}")
+                # DM the user if possible
+                try:
+                    user = await self.fetch_user(discord_id)
+                    await user.send(f"Linked SteamID64 {steamid} to your Discord account.")
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"[Link] Exception handling link_attempt: {e}")
+            finally:
+                return
+
+        # For all other events, ignore until the Discord client is ready and guild is set
+        if not getattr(self, "_guild", None):
+            et = t if t is not None else "?"
             print(f"[ProxBot] Received event '{et}' before bot ready; ignoring")
             return
-        t = ev.get("type")
-        if t == "link_attempt":
-            code = ev.get("code")
-            player = ev.get("player", {})
-            steamid = player.get("steamid64")
-            if not code or not steamid:
-                return
-            entry = self._pending_codes.get(str(code))
-            if not entry:
-                return
-            discord_id, expiry = entry
-            if time.time() > expiry:
-                del self._pending_codes[str(code)]
-                return
-            # Link and persist
-            self.steam_to_discord[steamid] = discord_id
-            del self._pending_codes[str(code)]
-            self.save_mapping(get_settings().MAPPING_FILE)
-            # DM the user if possible
-            try:
-                user = await self.fetch_user(discord_id)
-                await user.send(f"Linked SteamID64 {steamid} to your Discord account.")
-            except Exception:
-                pass
-            return
+
+        # From here on, guild-dependent events
+        t = t
+        
         if t == "player_death":
             player = ev.get("player", {})
             steamid = player.get("steamid64")
