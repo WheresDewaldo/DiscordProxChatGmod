@@ -284,7 +284,6 @@ class ProxBot(discord.Client):
             for uid in list(self.steam_to_discord.values()):
                 await ensure_in_channel(self.guild, uid, self.living_channel)
             # Optional cleanup of empty cluster channels
-            from .config import get_settings
             if self._can_manage_channels and get_settings().PROX_CLEANUP_CLUSTERS:
                 print("[ProxBot] round_end: cleaning up empty cluster channels")
                 try:
