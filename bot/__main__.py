@@ -122,6 +122,14 @@ class ProxBot(discord.Client):
         save_mapping(mapping_file, self.steam_to_discord)
 
     async def handle_event(self, ev: dict):
+        # Ignore events until the Discord client is ready and guild is set
+        if not getattr(self, "_guild", None):
+            try:
+                et = ev.get("type")
+            except Exception:
+                et = "?"
+            print(f"[ProxBot] Received event '{et}' before bot ready; ignoring")
+            return
         t = ev.get("type")
         if t == "link_attempt":
             code = ev.get("code")

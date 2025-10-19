@@ -21,8 +21,13 @@ def create_app(secret: str, on_event: Callable[[dict], Awaitable[None]]) -> web.
             payload = await req.json()
         except Exception:
             return web.json_response({"error": "invalid_json"}, status=400)
-        await on_event(payload)
-        return web.json_response({"ok": True})
+        try:
+            await on_event(payload)
+            return web.json_response({"ok": True})
+        except Exception as e:
+            # Log the exception server-side; return 200 to avoid hammering with retries
+            print(f"[Bridge] Error handling event: {e}")
+            return web.json_response({"ok": False, "error": "handler_exception"}, status=200)
 
     app.add_routes([
         web.get("/health", health),
