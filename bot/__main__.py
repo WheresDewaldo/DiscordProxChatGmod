@@ -48,6 +48,8 @@ class ProxBot(discord.Client):
         self._not_ready_last_log_ts = 0.0
         # Slash commands
         self.tree = app_commands.CommandTree(self)
+        # Internal: seeded flag
+        self._clusters_seeded = False
 
     def _refresh_perms(self) -> None:
         try:
@@ -116,6 +118,21 @@ class ProxBot(discord.Client):
         except Exception:
             pass
         # Ready
+        # Seed a couple of cluster channels early to avoid rate/permission surprises during events
+        try:
+            from .config import get_settings
+            if get_settings().PROX_ENABLE_CLUSTERING and self._can_manage_channels and self.guild:
+                async def _seed():
+                    try:
+                        if not self._clusters_seeded:
+                            print("[ProxBot] Seeding initial cluster channels (target=2)")
+                            await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, 2)
+                            self._clusters_seeded = True
+                    except Exception as e:
+                        print(f"[ProxBot] Cluster seed error: {e}")
+                asyncio.create_task(_seed())
+        except Exception:
+            pass
 
     async def setup_hook(self) -> None:
         # Define slash commands here so they bind to this instance
