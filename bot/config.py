@@ -26,6 +26,12 @@ class Settings(BaseModel):
     PROX_STABILITY_BATCHES: int = 3  # require N consecutive batches in same cluster before move
     PROX_MIN_MOVE_INTERVAL_SEC: float = 5.0  # per-user min interval between moves
 
+    # Death handling
+    PROX_DEAD_MUTE: bool = True
+    PROX_DEAD_DEAFEN: bool = True
+    # Optional: at round start, move mapped users (in voice) to Living channel
+    PROX_MOVE_TO_LIVING_ON_START: bool = True
+
 
 def get_settings() -> Settings:
     # Load .env if present

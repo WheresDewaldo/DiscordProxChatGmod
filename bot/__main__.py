@@ -264,8 +264,14 @@ class ProxBot(discord.Client):
             if steamid and steamid in self.steam_to_discord:
                 uid = self.steam_to_discord[steamid]
                 print(f"[ProxBot] player_death for steamid={steamid} mapped uid={uid}")
-                # Move to Dead channel and optionally deafen
-                await ensure_in_channel(self.guild, uid, self.dead_channel, mute=None, deafen=None)
+                # Move to Dead channel and optionally server mute/deafen
+                await ensure_in_channel(
+                    self.guild,
+                    uid,
+                    self.dead_channel,
+                    mute=get_settings().PROX_DEAD_MUTE,
+                    deafen=get_settings().PROX_DEAD_DEAFEN,
+                )
         elif t == "round_end":
             # Return all mapped users to the Living channel and clear deaf/mute
             for uid in list(self.steam_to_discord.values()):
@@ -274,8 +280,10 @@ class ProxBot(discord.Client):
             if self._can_manage_channels:
                 await cleanup_cluster_channels(self.guild, self.cluster_prefix)
         elif t == "round_start":
-            # Optional: reset state
-            pass
+            # Optional: move mapped users that are already in voice to Living (normalize state)
+            if get_settings().PROX_MOVE_TO_LIVING_ON_START:
+                for uid in list(self.steam_to_discord.values()):
+                    await ensure_in_channel(self.guild, uid, self.living_channel)
         elif t == "player_pos_batch":
             # Respect config toggle
             if not get_settings().PROX_ENABLE_CLUSTERING:
