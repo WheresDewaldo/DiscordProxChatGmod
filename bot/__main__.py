@@ -152,17 +152,17 @@ class ProxBot(discord.Client):
                 code = str(code_raw).strip().upper() if code_raw is not None else None
                 if not code or not steamid:
                     print(f"[Link] Invalid link_attempt payload: code={code_raw!r} steamid={steamid!r}")
-                    return
+                    return {"linked": False, "reason": "invalid_payload"}
                 entry = self._pending_codes.get(code)
                 if not entry:
                     print(f"[Link] Code not found: {code} from steamid {steamid}")
-                    return
+                    return {"linked": False, "reason": "code_not_found"}
                 discord_id, expiry = entry
                 now_ts = time.time()
                 if now_ts > expiry:
                     print(f"[Link] Code expired: {code} for discord {discord_id}")
                     del self._pending_codes[code]
-                    return
+                    return {"linked": False, "reason": "code_expired"}
                 # Link and persist
                 self.steam_to_discord[str(steamid)] = int(discord_id)
                 del self._pending_codes[code]
@@ -174,10 +174,10 @@ class ProxBot(discord.Client):
                     await user.send(f"Linked SteamID64 {steamid} to your Discord account.")
                 except Exception:
                     pass
+                return {"linked": True}
             except Exception as e:
                 print(f"[Link] Exception handling link_attempt: {e}")
-            finally:
-                return
+                return {"linked": False, "reason": "exception"}
 
         # For all other events, ignore until the Discord client is ready and guild is set
         if not getattr(self, "_guild", None):

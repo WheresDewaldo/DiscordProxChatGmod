@@ -31,8 +31,11 @@ def create_app(secret: str, on_event: Callable[[dict], Awaitable[None]]) -> web.
         except Exception:
             pass
         try:
-            await on_event(payload)
-            return web.json_response({"ok": True})
+            result = await on_event(payload)
+            resp = {"ok": True}
+            if isinstance(result, dict):
+                resp.update(result)
+            return web.json_response(resp)
         except Exception as e:
             # Log the exception server-side; return 200 to avoid hammering with retries
             print(f"[Bridge] Error handling event: {e}")

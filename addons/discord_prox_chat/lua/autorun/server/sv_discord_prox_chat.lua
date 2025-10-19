@@ -29,13 +29,22 @@ if SERVER then
                 ["Content-Type"] = "application/json",
                 ["x-bridge-secret"] = secret,
             },
-            success = function(_, code)
+            success = function(data, code)
                 if code ~= 200 then
                     print("[ProxChat] Bridge POST failed: " .. tostring(code))
                 else
                     -- print success for link_attempts
                     if bodyTbl and bodyTbl.type == "link_attempt" then
                         print("[ProxChat] Bridge POST ok for link_attempt")
+                        local ok, resp = pcall(util.JSONToTable, data or "")
+                        if ok and istable(resp) then
+                            if resp.linked == true then
+                                -- Notify all players? Better to target the caller, but we don't have ref here
+                                print("[ProxChat] Link succeeded per bridge response")
+                            elseif resp.linked == false then
+                                print("[ProxChat] Link failed per bridge response: " .. tostring(resp.reason))
+                            end
+                        end
                     end
                 end
             end,
@@ -82,8 +91,46 @@ if SERVER then
             ply:ChatPrint("[ProxChat] Invalid code format. Use /linksteam in Discord to get a code, then type !link CODE here.")
             return "" -- suppress echo
         end
-        emit_event({ type = "link_attempt", ts = CurTime(), code = code, player = { steamid64 = ply:SteamID64() } })
-        ply:ChatPrint("[ProxChat] Link code sent. If successful, you'll get a DM in Discord.")
+        -- Capture player for callback feedback
+        local sid = ply:SteamID64()
+        HTTP({
+            url = string.TrimRight(get_cvar_str("proxchat_bridge_url", "http://127.0.0.1:8085"), "/") .. "/events",
+            method = "POST",
+            body = util.TableToJSON({ type = "link_attempt", ts = CurTime(), code = code, player = { steamid64 = sid } }),
+            headers = {
+                ["Content-Type"] = "application/json",
+                ["x-bridge-secret"] = get_cvar_str("proxchat_bridge_secret", ""),
+            },
+            success = function(data, code)
+                if code ~= 200 then
+                    ply:ChatPrint("[ProxChat] Bridge request failed (" .. tostring(code) .. ")")
+                    return
+                end
+                local ok, resp = pcall(util.JSONToTable, data or "")
+                if ok and istable(resp) then
+                    if resp.linked == true then
+                        ply:ChatPrint("[ProxChat] Linked! You should receive a DM in Discord.")
+                    elseif resp.linked == false then
+                        local reason = tostring(resp.reason or "unknown")
+                        if reason == "code_not_found" then
+                            ply:ChatPrint("[ProxChat] That code was not found. Generate a new one with /linksteam in Discord.")
+                        elseif reason == "code_expired" then
+                            ply:ChatPrint("[ProxChat] That code expired. Generate a new one with /linksteam in Discord.")
+                        else
+                            ply:ChatPrint("[ProxChat] Link failed (" .. reason .. ").")
+                        end
+                    else
+                        ply:ChatPrint("[ProxChat] Bridge responded unexpectedly.")
+                    end
+                else
+                    ply:ChatPrint("[ProxChat] Invalid response from bridge.")
+                end
+            end,
+            failed = function(err)
+                ply:ChatPrint("[ProxChat] Bridge error: " .. tostring(err))
+            end
+        })
+        -- Hide the chat message either way
         return "" -- always hide the chat message
     end)
 
