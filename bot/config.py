@@ -12,7 +12,7 @@ class Settings(BaseModel):
     DEAD_CHANNEL_ID: int
 
     BRIDGE_HOST: str = "0.0.0.0"
-    BRIDGE_PORT: int = 8080
+    BRIDGE_PORT: int = 8085
     BRIDGE_SECRET: str
 
     MAPPING_FILE: str | None = None
