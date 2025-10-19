@@ -236,7 +236,6 @@ class ProxBot(discord.Client):
                     user_to_cluster[uid] = idx
 
             # Hysteresis and throttling
-            import time
             now = time.time()
             stability_needed = get_settings().PROX_STABILITY_BATCHES
             min_interval = get_settings().PROX_MIN_MOVE_INTERVAL_SEC
