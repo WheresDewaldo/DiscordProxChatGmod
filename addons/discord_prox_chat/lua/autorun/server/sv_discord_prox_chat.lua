@@ -3,6 +3,7 @@ if SERVER then
     CreateConVar("proxchat_bridge_url", "http://127.0.0.1:8085", FCVAR_ARCHIVE, "Base URL for the proximity chat bridge")
     CreateConVar("proxchat_bridge_secret", "", FCVAR_ARCHIVE, "Shared secret for the proximity chat bridge")
     CreateConVar("proxchat_pos_hz", "2", FCVAR_ARCHIVE, "Position batch frequency in Hz (2-5 recommended)")
+    CreateConVar("proxchat_enabled", "1", FCVAR_ARCHIVE, "Enable/disable ProxChat addon hooks without unloading")
 
     util.AddNetworkString("proxchat_debug")
 
@@ -54,24 +55,40 @@ if SERVER then
         })
     end
 
+    local function is_enabled()
+        local cv = GetConVar("proxchat_enabled")
+        return cv and cv:GetBool()
+    end
+
     local function emit_event(ev)
+        if not is_enabled() then return end
         http_post("/events", ev)
     end
 
+    local round_active = false
+
     hook.Add("TTTBeginRound", "ProxChat_TTTBeginRound", function()
+        if not is_enabled() then return end
+        round_active = true
+        print("[ProxChat] TTTBeginRound fired; round_active=true")
         emit_event({ type = "round_start", ts = CurTime(), round_id = tostring(os.time()) })
     end)
 
     hook.Add("TTTEndRound", "ProxChat_TTTEndRound", function()
+        if not is_enabled() then return end
+        round_active = false
+        print("[ProxChat] TTTEndRound fired; round_active=false")
         emit_event({ type = "round_end", ts = CurTime() })
     end)
 
     hook.Add("PlayerSpawn", "ProxChat_PlayerSpawn", function(ply)
+        if not is_enabled() then return end
         if not IsValid(ply) or not ply.SteamID64 then return end
         emit_event({ type = "player_spawn", ts = CurTime(), player = { steamid64 = ply:SteamID64() } })
     end)
 
     hook.Add("PlayerDeath", "ProxChat_PlayerDeath", function(victim, inflictor, attacker)
+        if not is_enabled() then return end
         if not IsValid(victim) or not victim.SteamID64 then return end
         emit_event({ type = "player_death", ts = CurTime(), player = { steamid64 = victim:SteamID64() } })
     end)
@@ -157,6 +174,8 @@ if SERVER then
     -- periodic position batching
     local accum = 0
     hook.Add("Think", "ProxChat_PosBatchThink", function()
+        if not is_enabled() then return end
+        if not round_active then return end
         local hz = math.Clamp(GetConVar("proxchat_pos_hz"):GetInt(), 1, 10)
         local interval = 1 / hz
         accum = accum + FrameTime()
