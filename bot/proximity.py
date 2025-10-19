@@ -52,9 +52,16 @@ async def ensure_cluster_channels(
         print(f"[ProxBot] ensure_cluster_channels: found {len(existing)} existing for prefix '{prefix}': {names}")
     except Exception:
         pass
-    # Create missing
-    for i in range(len(existing) + 1, count + 1):
+    # Deterministically ensure names prefix-1..prefix-count exist
+    existing_by_name = {ch.name: ch for ch in existing}
+    for i in range(1, count + 1):
         name = f"{prefix}-{i}"
+        if name in existing_by_name:
+            continue
+        try:
+            print(f"[ProxBot] ensure_cluster_channels: creating missing '{name}' (target count={count}, have={len(existing_by_name)})")
+        except Exception:
+            pass
         kwargs = {}
         cat_ok = False
         if category_id:
@@ -76,12 +83,14 @@ async def ensure_cluster_channels(
         try:
             ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
             print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
+            existing_by_name[name] = ch
         except Exception as e:
             # Fallback: try without category
             if kwargs:
                 try:
                     ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
                     print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
+                    existing_by_name[name] = ch
                 except Exception as e2:
                     print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
                     break
