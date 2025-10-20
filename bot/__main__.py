@@ -356,6 +356,11 @@ class ProxBot(discord.Client):
                 )
         elif t == "round_end":
             print("[ProxBot] round_end: returning mapped users to Living and clearing mute/deafen")
+            # Clear all hysteresis and cooldown state to prevent carryover into next round
+            self._last_cluster.clear()
+            self._stable_count.clear()
+            self._last_move_ts.clear()
+            self._last_cluster_move_ts.clear()
             # Clear mute/deafen regardless of move ability
             for uid in list(self.steam_to_discord.values()):
                 try:
@@ -470,6 +475,20 @@ class ProxBot(discord.Client):
 
             # Move users that stabilized into a cluster and passed min interval
             for uid, cidx in user_to_cluster.items():
+                # Only move users who are currently in Living or a cluster channel
+                # This prevents moving spectators or users in unrelated channels
+                member = self.guild.get_member(uid)
+                if not member or not member.voice or not member.voice.channel:
+                    continue
+                current_channel_id = member.voice.channel.id
+                # Build list of valid "moveable" channel IDs (Living + all cluster channels)
+                valid_channel_ids = {self.living_channel}
+                for ch in channels:
+                    valid_channel_ids.add(ch.id)
+                if current_channel_id not in valid_channel_ids:
+                    # User is in Dead, AFK, or some other channel; don't move them
+                    continue
+                
                 prev = self._last_cluster.get(uid)
                 if prev == cidx:
                     self._stable_count[uid] = self._stable_count.get(uid, 0) + 1
