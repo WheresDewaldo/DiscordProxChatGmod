@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
+import asyncio
+from typing import Optional
 from typing import Dict, List, Tuple
 
 
@@ -43,6 +45,47 @@ def cluster_positions(
     return clusters
 
 
+_creation_tasks: dict[str, asyncio.Task] = {}
+_last_attempt: dict[str, float] = {}
+
+
+async def _create_channel(guild, name: str, *, category_id: Optional[int] = None):
+    """Background create of a voice channel; logs results and handles fallback."""
+    kwargs = {}
+    cat_ok = False
+    if category_id:
+        cat = guild.get_channel(category_id)
+        try:
+            import discord  # type: ignore
+            if cat and isinstance(cat, discord.CategoryChannel):
+                kwargs["category"] = cat
+                cat_ok = True
+                try:
+                    print(f"[ProxBot] ensure_cluster_channels(bg): using category '{cat.name}' ({category_id}) for '{name}'")
+                except Exception:
+                    pass
+            else:
+                print(f"[ProxBot] WARN: PROX_CATEGORY_ID={category_id} not a category; creating '{name}' at root.")
+        except Exception:
+            pass
+    try:
+        ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
+        print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
+        return ch
+    except Exception as e:
+        if kwargs:
+            try:
+                ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
+                print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
+                return ch
+            except Exception as e2:
+                print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
+                return None
+        else:
+            print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e}")
+            return None
+
+
 async def ensure_cluster_channels(
     guild, prefix: str, category_id: int | None, count: int
 ):
@@ -55,64 +98,29 @@ async def ensure_cluster_channels(
         pass
     # Deterministically ensure names prefix-1..prefix-count exist
     existing_by_name = {ch.name: ch for ch in existing}
-    # Basic backoff to avoid hammering Discord create endpoint
-    if not hasattr(ensure_cluster_channels, "_last_attempt"):
-        ensure_cluster_channels._last_attempt = {}  # type: ignore[attr-defined]
-    last_attempt = ensure_cluster_channels._last_attempt  # type: ignore[attr-defined]
-
+    # Determine missing desired names and schedule background creates
     for i in range(1, count + 1):
         name = f"{prefix}-{i}"
         if name in existing_by_name:
             continue
-        # Skip if attempted very recently (within 15s)
         now = time.time()
-        last = last_attempt.get(name, 0)
+        last = _last_attempt.get(name, 0)
         if now - last < 15:
             try:
                 print(f"[ProxBot] ensure_cluster_channels: skipping create for '{name}' (last attempt {int(now-last)}s ago)")
             except Exception:
                 pass
             continue
-        last_attempt[name] = now
+        _last_attempt[name] = now
+        if name in _creation_tasks and not _creation_tasks[name].done():
+            # Already creating
+            continue
         try:
             print(f"[ProxBot] ensure_cluster_channels: creating missing '{name}' (target count={count}, have={len(existing_by_name)})")
         except Exception:
             pass
-        kwargs = {}
-        cat_ok = False
-        if category_id:
-            cat = guild.get_channel(category_id)
-            # Only attach if it's a category the bot can access
-            try:
-                import discord  # type: ignore
-                if cat and isinstance(cat, discord.CategoryChannel):
-                    kwargs["category"] = cat
-                    cat_ok = True
-                    try:
-                        print(f"[ProxBot] ensure_cluster_channels: using category '{cat.name}' ({category_id}) for '{name}'")
-                    except Exception:
-                        pass
-                else:
-                    print(f"[ProxBot] WARN: PROX_CATEGORY_ID={category_id} does not resolve to a category; creating '{name}' at guild root.")
-            except Exception:
-                pass
-        try:
-            ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
-            print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
-            existing_by_name[name] = ch
-        except Exception as e:
-            # Fallback: try without category
-            if kwargs:
-                try:
-                    ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
-                    print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
-                    existing_by_name[name] = ch
-                except Exception as e2:
-                    print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
-                    break
-            else:
-                print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e}")
-                break
+        # Fire-and-forget background creation; do not block event processing
+        _creation_tasks[name] = asyncio.create_task(_create_channel(guild, name, category_id=category_id))
     # Refresh list (only channels the bot can see)
     existing = [ch for ch in guild.voice_channels if ch.name.startswith(prefix)]
     existing.sort(key=lambda c: c.name)
