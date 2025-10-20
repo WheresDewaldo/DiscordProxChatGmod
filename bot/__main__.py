@@ -203,13 +203,19 @@ class ProxBot(discord.Client):
                 if n <= 0 or n > 20:
                     await interaction.edit_original_response(content="Please choose 1..20 channels to seed.")
                     return
-                from .proximity import create_cluster_channels
-                created = await create_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, n)
-                if created:
-                    names = ", ".join(ch.name for ch in created)
-                    await interaction.edit_original_response(content=f"Created {len(created)} channels: {names}")
-                else:
-                    await interaction.edit_original_response(content="No channels created (they may already exist or creation failed). Check bot logs.")
+                # Schedule background ensure to avoid long waits, reply immediately
+                from .proximity import ensure_cluster_channels
+                async def _bg():
+                    try:
+                        await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, n)
+                    except Exception as e:
+                        print(f"[ProxBot] seedclusters(bg) error: {e}")
+                asyncio.create_task(_bg())
+                # Give a quick snapshot of currently visible channels with our prefix
+                existing = [ch for ch in self.guild.voice_channels if ch.name.startswith(self.cluster_prefix)]
+                existing.sort(key=lambda c: c.name)
+                names = ", ".join(ch.name for ch in existing) or "<none>"
+                await interaction.edit_original_response(content=f"Seeding up to {n} channels in background. Currently have: {names}. Watch bot logs for creation updates.")
             except Exception as e:
                 await interaction.edit_original_response(content=f"Error seeding clusters: {e}")
 
@@ -226,6 +232,28 @@ class ProxBot(discord.Client):
                 await interaction.edit_original_response(content=f"Deleted {deleted} empty cluster channels.")
             except Exception as e:
                 await interaction.edit_original_response(content=f"Error cleaning clusters: {e}")
+
+        @self.tree.command(name="listvoice", description="List voice channels and IDs (admin only)", guild=guild_obj)
+        async def listvoice(interaction: discord.Interaction, prefix: Optional[str] = None):
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            try:
+                perms = getattr(interaction.user, "guild_permissions", None)
+                if not perms or not perms.manage_guild:
+                    await interaction.edit_original_response(content="Admin only: requires Manage Server.")
+                    return
+                chans = list(self.guild.voice_channels)
+                if prefix:
+                    chans = [c for c in chans if c.name.startswith(prefix)]
+                chans.sort(key=lambda c: c.name)
+                if not chans:
+                    await interaction.edit_original_response(content="No voice channels found with that filter.")
+                    return
+                lines = [f"{c.name} — {c.id}" for c in chans[:80]]
+                more = "" if len(chans) <= 80 else f"\n… and {len(chans)-80} more."
+                await interaction.edit_original_response(content="Voice channels (name — id):\n" + "\n".join(lines) + more)
+            except Exception as e:
+                await interaction.edit_original_response(content=f"Error listing channels: {e}")
 
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: Exception):
@@ -460,6 +488,23 @@ class ProxBot(discord.Client):
 
 async def main():
     settings = get_settings()
+    # Validate and log a redacted snapshot of the token to help diagnose 401/Improper token
+    def _mask(tok: str) -> str:
+        t = tok.strip()
+        if len(t) <= 10:
+            return "***"
+        return f"{t[:6]}…{t[-4:]} (len={len(t)})"
+
+    tok = (settings.DISCORD_TOKEN or "").strip()
+    if tok.startswith("Bot "):
+        print("[ProxBot] ERROR: DISCORD_TOKEN should NOT include the 'Bot ' prefix. Provide only the raw token string.")
+        print(f"[ProxBot] Token snapshot: {_mask(tok)}")
+        raise SystemExit(1)
+    if len(tok) < 50:
+        # Discord bot tokens are typically long; a very short value usually means misconfigured env
+        print("[ProxBot] ERROR: DISCORD_TOKEN looks too short. Double-check your environment or .env under systemd.")
+        print(f"[ProxBot] Token snapshot: {_mask(tok)}")
+        raise SystemExit(1)
     bot = ProxBot(
         settings.GUILD_ID,
         settings.LIVING_CHANNEL_ID,
@@ -475,7 +520,11 @@ async def main():
 
     # run discord client and http server concurrently
     async def run_bot():
-        await bot.start(settings.DISCORD_TOKEN)
+        try:
+            await bot.start(settings.DISCORD_TOKEN)
+        except discord.errors.LoginFailure:
+            print("[ProxBot] Login failed: Improper token passed. Verify DISCORD_TOKEN under your service environment (no quotes, no 'Bot ' prefix, up-to-date token).")
+            raise
 
     async def run_http():
         await run_server(settings.BRIDGE_HOST, settings.BRIDGE_PORT, app)

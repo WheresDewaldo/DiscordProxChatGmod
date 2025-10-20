@@ -51,6 +51,7 @@ _last_attempt: dict[str, float] = {}
 
 async def _create_channel(guild, name: str, *, category_id: Optional[int] = None):
     """Background create of a voice channel; logs results and handles fallback."""
+    TIMEOUT = 10.0  # seconds per Discord API operation to avoid indefinite hangs
     kwargs = {}
     cat_ok = False
     if category_id:
@@ -69,13 +70,19 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
         except Exception:
             pass
     try:
-        ch = await guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster")
+        ch = await asyncio.wait_for(
+            guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster"),
+            timeout=TIMEOUT,
+        )
         print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
         return ch
     except Exception as e:
         if kwargs:
             try:
-                ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
+                ch = await asyncio.wait_for(
+                    guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)"),
+                    timeout=TIMEOUT,
+                )
                 print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
                 # If a category was desired, attempt to move it into that category now
                 if category_id:
@@ -83,13 +90,42 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
                         cat = guild.get_channel(category_id)
                         import discord  # type: ignore
                         if cat and isinstance(cat, discord.CategoryChannel):
-                            await ch.edit(category=cat, reason="ProxChat move to category after fallback create")
+                            await asyncio.wait_for(
+                                ch.edit(category=cat, reason="ProxChat move to category after fallback create"),
+                                timeout=TIMEOUT,
+                            )
                             print(f"[ProxBot] Moved '{ch.name}' into category '{cat.name}' after fallback create")
                     except Exception as e3:
                         print(f"[ProxBot] WARN: Could not move '{ch.name}' into category: {e3}")
                 return ch
             except Exception as e2:
                 print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
+                # Last resort: clone an existing channel (e.g., '{prefix}-1') if present
+                try:
+                    prefix = name.split("-")[0]
+                    template_name = f"{prefix}-1"
+                    template = next((vc for vc in guild.voice_channels if vc.name == template_name), None)
+                    if template is not None:
+                        cloned = await asyncio.wait_for(
+                            template.clone(name=name, reason="ProxChat clone fallback for cluster"),
+                            timeout=TIMEOUT,
+                        )
+                        print(f"[ProxBot] Cloned '{template.name}' to '{cloned.name}' as fallback")
+                        if category_id:
+                            try:
+                                cat = guild.get_channel(category_id)
+                                import discord  # type: ignore
+                                if cat and isinstance(cat, discord.CategoryChannel):
+                                    await asyncio.wait_for(
+                                        cloned.edit(category=cat, reason="ProxChat move cloned channel to category"),
+                                        timeout=TIMEOUT,
+                                    )
+                                    print(f"[ProxBot] Moved cloned '{cloned.name}' into category '{cat.name}'")
+                            except Exception as e4:
+                                print(f"[ProxBot] WARN: Could not move cloned '{cloned.name}' into category: {e4}")
+                        return cloned
+                except Exception as e5:
+                    print(f"[ProxBot] ERROR: Clone fallback failed for '{name}': {e5}")
                 return None
         else:
             print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e}")
