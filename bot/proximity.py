@@ -50,8 +50,9 @@ _last_attempt: dict[str, float] = {}
 
 
 async def _create_channel(guild, name: str, *, category_id: Optional[int] = None):
-    """Background create of a voice channel; logs results and handles fallback."""
-    TIMEOUT = 10.0  # seconds per Discord API operation to avoid indefinite hangs
+    """Background create of a voice channel; logs results and handles fallback with retries."""
+    TIMEOUT = 30.0  # seconds per Discord API operation
+    MAX_RETRIES = 3
     kwargs = {}
     cat_ok = False
     if category_id:
@@ -69,19 +70,33 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
                 print(f"[ProxBot] WARN: PROX_CATEGORY_ID={category_id} not a category; creating '{name}' at root.")
         except Exception:
             pass
-    try:
-        ch = await asyncio.wait_for(
-            guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster"),
-            timeout=TIMEOUT,
-        )
-        print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
-        return ch
-    except Exception as e:
-        import traceback
-        print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}' with category: {type(e).__name__}: {e}")
-        if hasattr(e, 'status') and hasattr(e, 'code'):
-            print(f"[ProxBot] HTTP {e.status}, code={e.code}, text={getattr(e, 'text', '?')}")
-        if kwargs:
+    
+    # Try creating with category (with retries)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            ch = await asyncio.wait_for(
+                guild.create_voice_channel(name, **kwargs, reason="ProxChat create cluster"),
+                timeout=TIMEOUT,
+            )
+            print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
+            return ch
+        except asyncio.TimeoutError:
+            if attempt < MAX_RETRIES:
+                wait = 2 ** attempt  # exponential backoff: 2s, 4s
+                print(f"[ProxBot] Create '{name}' timed out (attempt {attempt}/{MAX_RETRIES}), retrying in {wait}s...")
+                await asyncio.sleep(wait)
+            else:
+                print(f"[ProxBot] Create '{name}' timed out after {MAX_RETRIES} attempts")
+                break
+        except Exception as e:
+            print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}' with category: {type(e).__name__}: {e}")
+            if hasattr(e, 'status') and hasattr(e, 'code'):
+                print(f"[ProxBot] HTTP {e.status}, code={e.code}, text={getattr(e, 'text', '?')}")
+            break  # Don't retry on non-timeout errors
+    
+    # Fallback: try creating at guild root (with retries)
+    if kwargs:
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 ch = await asyncio.wait_for(
                     guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)"),
@@ -102,47 +117,63 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
                     except Exception as e3:
                         print(f"[ProxBot] WARN: Could not move '{ch.name}' into category: {type(e3).__name__}: {e3}")
                 return ch
+            except asyncio.TimeoutError:
+                if attempt < MAX_RETRIES:
+                    wait = 2 ** attempt
+                    print(f"[ProxBot] Create '{name}' at root timed out (attempt {attempt}/{MAX_RETRIES}), retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                else:
+                    print(f"[ProxBot] Create '{name}' at root timed out after {MAX_RETRIES} attempts")
+                    break
             except Exception as e2:
                 print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}' at root: {type(e2).__name__}: {e2}")
                 if hasattr(e2, 'status') and hasattr(e2, 'code'):
                     print(f"[ProxBot] HTTP {e2.status}, code={e2.code}, text={getattr(e2, 'text', '?')}")
-                # Last resort: clone an existing channel (e.g., '{prefix}-1') if present
+                break  # Don't retry on non-timeout errors
+    
+    # Last resort: clone an existing channel (e.g., '{prefix}-1') if present
+    prefix = name.split("-")[0]
+    template_name = f"{prefix}-1"
+    template = next((vc for vc in guild.voice_channels if vc.name == template_name), None)
+    if template is None:
+        print(f"[ProxBot] No template channel '{template_name}' found for clone fallback")
+        return None
+    
+    print(f"[ProxBot] Attempting clone fallback from '{template.name}' → '{name}'")
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            cloned = await asyncio.wait_for(
+                template.clone(name=name, reason="ProxChat clone fallback for cluster"),
+                timeout=TIMEOUT,
+            )
+            print(f"[ProxBot] Cloned '{template.name}' to '{cloned.name}' as fallback")
+            if category_id:
                 try:
-                    prefix = name.split("-")[0]
-                    template_name = f"{prefix}-1"
-                    template = next((vc for vc in guild.voice_channels if vc.name == template_name), None)
-                    if template is not None:
-                        print(f"[ProxBot] Attempting clone fallback from '{template.name}' → '{name}'")
-                        cloned = await asyncio.wait_for(
-                            template.clone(name=name, reason="ProxChat clone fallback for cluster"),
+                    cat = guild.get_channel(category_id)
+                    import discord  # type: ignore
+                    if cat and isinstance(cat, discord.CategoryChannel):
+                        await asyncio.wait_for(
+                            cloned.edit(category=cat, reason="ProxChat move cloned channel to category"),
                             timeout=TIMEOUT,
                         )
-                        print(f"[ProxBot] Cloned '{template.name}' to '{cloned.name}' as fallback")
-                        if category_id:
-                            try:
-                                cat = guild.get_channel(category_id)
-                                import discord  # type: ignore
-                                if cat and isinstance(cat, discord.CategoryChannel):
-                                    await asyncio.wait_for(
-                                        cloned.edit(category=cat, reason="ProxChat move cloned channel to category"),
-                                        timeout=TIMEOUT,
-                                    )
-                                    print(f"[ProxBot] Moved cloned '{cloned.name}' into category '{cat.name}'")
-                            except Exception as e4:
-                                print(f"[ProxBot] WARN: Could not move cloned '{cloned.name}' into category: {type(e4).__name__}: {e4}")
-                        return cloned
-                    else:
-                        print(f"[ProxBot] No template channel '{template_name}' found for clone fallback")
-                except Exception as e5:
-                    print(f"[ProxBot] ERROR: Clone fallback failed for '{name}': {type(e5).__name__}: {e5}")
-                    if hasattr(e5, 'status') and hasattr(e5, 'code'):
-                        print(f"[ProxBot] HTTP {e5.status}, code={e5.code}, text={getattr(e5, 'text', '?')}")
+                        print(f"[ProxBot] Moved cloned '{cloned.name}' into category '{cat.name}'")
+                except Exception as e4:
+                    print(f"[ProxBot] WARN: Could not move cloned '{cloned.name}' into category: {type(e4).__name__}: {e4}")
+            return cloned
+        except asyncio.TimeoutError:
+            if attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                print(f"[ProxBot] Clone '{name}' timed out (attempt {attempt}/{MAX_RETRIES}), retrying in {wait}s...")
+                await asyncio.sleep(wait)
+            else:
+                print(f"[ProxBot] Clone '{name}' timed out after {MAX_RETRIES} attempts")
                 return None
-        else:
-            print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {type(e).__name__}: {e}")
-            if hasattr(e, 'status') and hasattr(e, 'code'):
-                print(f"[ProxBot] HTTP {e.status}, code={e.code}, text={getattr(e, 'text', '?')}")
+        except Exception as e5:
+            print(f"[ProxBot] ERROR: Clone fallback failed for '{name}': {type(e5).__name__}: {e5}")
+            if hasattr(e5, 'status') and hasattr(e5, 'code'):
+                print(f"[ProxBot] HTTP {e5.status}, code={e5.code}, text={getattr(e5, 'text', '?')}")
             return None
+    return None
 
 
 async def ensure_cluster_channels(
