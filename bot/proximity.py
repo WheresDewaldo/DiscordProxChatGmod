@@ -77,6 +77,10 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
         print(f"[ProxBot] Created voice channel '{ch.name}' (id={ch.id})" + (f" in category '{kwargs['category'].name}'" if cat_ok else ""))
         return ch
     except Exception as e:
+        import traceback
+        print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}' with category: {type(e).__name__}: {e}")
+        if hasattr(e, 'status') and hasattr(e, 'code'):
+            print(f"[ProxBot] HTTP {e.status}, code={e.code}, text={getattr(e, 'text', '?')}")
         if kwargs:
             try:
                 ch = await asyncio.wait_for(
@@ -96,16 +100,19 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
                             )
                             print(f"[ProxBot] Moved '{ch.name}' into category '{cat.name}' after fallback create")
                     except Exception as e3:
-                        print(f"[ProxBot] WARN: Could not move '{ch.name}' into category: {e3}")
+                        print(f"[ProxBot] WARN: Could not move '{ch.name}' into category: {type(e3).__name__}: {e3}")
                 return ch
             except Exception as e2:
-                print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
+                print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}' at root: {type(e2).__name__}: {e2}")
+                if hasattr(e2, 'status') and hasattr(e2, 'code'):
+                    print(f"[ProxBot] HTTP {e2.status}, code={e2.code}, text={getattr(e2, 'text', '?')}")
                 # Last resort: clone an existing channel (e.g., '{prefix}-1') if present
                 try:
                     prefix = name.split("-")[0]
                     template_name = f"{prefix}-1"
                     template = next((vc for vc in guild.voice_channels if vc.name == template_name), None)
                     if template is not None:
+                        print(f"[ProxBot] Attempting clone fallback from '{template.name}' → '{name}'")
                         cloned = await asyncio.wait_for(
                             template.clone(name=name, reason="ProxChat clone fallback for cluster"),
                             timeout=TIMEOUT,
@@ -122,13 +129,19 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
                                     )
                                     print(f"[ProxBot] Moved cloned '{cloned.name}' into category '{cat.name}'")
                             except Exception as e4:
-                                print(f"[ProxBot] WARN: Could not move cloned '{cloned.name}' into category: {e4}")
+                                print(f"[ProxBot] WARN: Could not move cloned '{cloned.name}' into category: {type(e4).__name__}: {e4}")
                         return cloned
+                    else:
+                        print(f"[ProxBot] No template channel '{template_name}' found for clone fallback")
                 except Exception as e5:
-                    print(f"[ProxBot] ERROR: Clone fallback failed for '{name}': {e5}")
+                    print(f"[ProxBot] ERROR: Clone fallback failed for '{name}': {type(e5).__name__}: {e5}")
+                    if hasattr(e5, 'status') and hasattr(e5, 'code'):
+                        print(f"[ProxBot] HTTP {e5.status}, code={e5.code}, text={getattr(e5, 'text', '?')}")
                 return None
         else:
-            print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e}")
+            print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {type(e).__name__}: {e}")
+            if hasattr(e, 'status') and hasattr(e, 'code'):
+                print(f"[ProxBot] HTTP {e.status}, code={e.code}, text={getattr(e, 'text', '?')}")
             return None
 
 
