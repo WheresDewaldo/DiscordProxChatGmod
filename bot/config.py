@@ -27,6 +27,8 @@ class Settings(BaseModel):
     PROX_MIN_MOVE_INTERVAL_SEC: float = 5.0  # per-user min interval between moves
     # Cleanup policy: whether to delete empty cluster channels on round_end
     PROX_CLEANUP_CLUSTERS: bool = False
+    # Optional: static list of cluster channel IDs (comma-separated) to use instead of dynamic creation
+    PROX_CLUSTER_STATIC_IDS: str | None = None
 
     # Death handling
     PROX_DEAD_MUTE: bool = True

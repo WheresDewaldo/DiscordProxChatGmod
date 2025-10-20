@@ -366,7 +366,21 @@ class ProxBot(discord.Client):
                 return
             try:
                 print(f"[ProxBot] Ensuring {len(clusters)} cluster channels with prefix '{self.cluster_prefix}'")
-                channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
+                # Prefer static channels if configured
+                static_ids = get_settings().PROX_CLUSTER_STATIC_IDS
+                channels = None
+                if static_ids:
+                    ids = [int(x.strip()) for x in static_ids.split(",") if x.strip().isdigit()]
+                    chans = []
+                    for cid in ids[:len(clusters)]:
+                        ch = self.guild.get_channel(cid)
+                        if ch and isinstance(ch, discord.VoiceChannel):
+                            chans.append(ch)
+                    if len(chans) >= 1:
+                        channels = chans
+                        print(f"[ProxBot] Using static cluster channels: {[c.name for c in chans]}")
+                if channels is None:
+                    channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
             except Exception as e:
                 if not self._perm_warned:
                     print(f"[ProxBot] Could not create/ensure cluster channels: {e}")
