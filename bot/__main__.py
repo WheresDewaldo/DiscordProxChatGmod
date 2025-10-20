@@ -38,7 +38,8 @@ class ProxBot(discord.Client):
         # Hysteresis state
         self._last_cluster: Dict[int, int] = {}  # user_id -> cluster_index
         self._stable_count: Dict[int, int] = {}
-        self._last_move_ts: Dict[int, float] = {}
+        self._last_move_ts: Dict[int, float] = {}  # per-user move cooldown
+        self._last_cluster_move_ts: Dict[int, float] = {}  # per-cluster cooldown (cluster_idx -> ts)
         # Permission/cache flags
         self._perm_warned = False
         self._can_manage_channels = False
@@ -459,8 +460,13 @@ class ProxBot(discord.Client):
 
             # Hysteresis and throttling
             now = time.time()
-            stability_needed = get_settings().PROX_STABILITY_BATCHES
+            # Allow faster moves when configured for static clusters
+            if get_settings().PROX_FAST_MOVE_ON_CHANGE:
+                stability_needed = 1
+            else:
+                stability_needed = get_settings().PROX_STABILITY_BATCHES
             min_interval = get_settings().PROX_MIN_MOVE_INTERVAL_SEC
+            cluster_cooldown = get_settings().PROX_CLUSTER_COOLDOWN_SEC
 
             # Move users that stabilized into a cluster and passed min interval
             for uid, cidx in user_to_cluster.items():
@@ -470,8 +476,19 @@ class ProxBot(discord.Client):
                 else:
                     self._last_cluster[uid] = cidx
                     self._stable_count[uid] = 1
+                
+                # Check per-user cooldown
                 last_move = self._last_move_ts.get(uid, 0.0)
-                if self._stable_count[uid] >= stability_needed and (now - last_move) >= min_interval:
+                if (now - last_move) < min_interval:
+                    continue
+                
+                # Check per-cluster cooldown to avoid rapid reassignments to the same cluster
+                last_cluster_move = self._last_cluster_move_ts.get(cidx, 0.0)
+                if (now - last_cluster_move) < cluster_cooldown:
+                    continue
+                
+                # Check stability threshold
+                if self._stable_count[uid] >= stability_needed:
                     if cidx < len(channels):
                         if not self._can_move_members:
                             if not self._perm_warned:
@@ -481,6 +498,7 @@ class ProxBot(discord.Client):
                         print(f"[ProxBot] Moving uid={uid} to {channels[cidx].name}")
                         await ensure_in_channel(self.guild, uid, channels[cidx].id)
                         self._last_move_ts[uid] = now
+                        self._last_cluster_move_ts[cidx] = now
         else:
             # Unknown event type ignored
             pass

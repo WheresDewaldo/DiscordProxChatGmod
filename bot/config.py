@@ -35,6 +35,13 @@ class Settings(BaseModel):
     PROX_DEAD_DEAFEN: bool = True
     # Optional: at round start, move mapped users (in voice) to Living channel
     PROX_MOVE_TO_LIVING_ON_START: bool = False
+    # Fast move mode: when enabled, users will be moved on the first observed cluster change
+    # instead of waiting for PROX_STABILITY_BATCHES consecutive batches. Useful when using
+    # static cluster channels and wanting snappier movement. Still respects PROX_MIN_MOVE_INTERVAL_SEC.
+    PROX_FAST_MOVE_ON_CHANGE: bool = False
+    # Per-cluster cooldown: minimum time (seconds) before moving another user into the same cluster
+    # to prevent rapid oscillation. Helps smooth movement in fast-move mode.
+    PROX_CLUSTER_COOLDOWN_SEC: float = 1.5
 
 
 def get_settings() -> Settings:
