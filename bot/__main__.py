@@ -191,6 +191,42 @@ class ProxBot(discord.Client):
                 except Exception:
                     pass
 
+        @self.tree.command(name="seedclusters", description="Create N proximity channels now (admin only)", guild=guild_obj)
+        async def seedclusters(interaction: discord.Interaction, n: int):
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            try:
+                perms = getattr(interaction.user, "guild_permissions", None)
+                if not perms or not perms.manage_guild:
+                    await interaction.edit_original_response(content="Admin only: requires Manage Server.")
+                    return
+                if n <= 0 or n > 20:
+                    await interaction.edit_original_response(content="Please choose 1..20 channels to seed.")
+                    return
+                from .proximity import create_cluster_channels
+                created = await create_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, n)
+                if created:
+                    names = ", ".join(ch.name for ch in created)
+                    await interaction.edit_original_response(content=f"Created {len(created)} channels: {names}")
+                else:
+                    await interaction.edit_original_response(content="No channels created (they may already exist or creation failed). Check bot logs.")
+            except Exception as e:
+                await interaction.edit_original_response(content=f"Error seeding clusters: {e}")
+
+        @self.tree.command(name="cleanupclusters", description="Delete empty proximity channels (admin only)", guild=guild_obj)
+        async def cleanupclusters(interaction: discord.Interaction):
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            try:
+                perms = getattr(interaction.user, "guild_permissions", None)
+                if not perms or not perms.manage_guild:
+                    await interaction.edit_original_response(content="Admin only: requires Manage Server.")
+                    return
+                deleted = await cleanup_cluster_channels(self.guild, self.cluster_prefix, category_id=self.cluster_category_id)
+                await interaction.edit_original_response(content=f"Deleted {deleted} empty cluster channels.")
+            except Exception as e:
+                await interaction.edit_original_response(content=f"Error cleaning clusters: {e}")
+
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: Exception):
             print(f"App command error: {error}")

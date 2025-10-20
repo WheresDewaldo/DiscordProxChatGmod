@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 import asyncio
-from typing import Optional
+from typing import Optional, List
 from typing import Dict, List, Tuple
 
 
@@ -77,6 +77,16 @@ async def _create_channel(guild, name: str, *, category_id: Optional[int] = None
             try:
                 ch = await guild.create_voice_channel(name, reason="ProxChat create cluster (fallback)")
                 print(f"[ProxBot] Created voice channel '{ch.name}' at guild root (fallback)")
+                # If a category was desired, attempt to move it into that category now
+                if category_id:
+                    try:
+                        cat = guild.get_channel(category_id)
+                        import discord  # type: ignore
+                        if cat and isinstance(cat, discord.CategoryChannel):
+                            await ch.edit(category=cat, reason="ProxChat move to category after fallback create")
+                            print(f"[ProxBot] Moved '{ch.name}' into category '{cat.name}' after fallback create")
+                    except Exception as e3:
+                        print(f"[ProxBot] WARN: Could not move '{ch.name}' into category: {e3}")
                 return ch
             except Exception as e2:
                 print(f"[ProxBot] ERROR: Failed to create cluster channel '{name}': {e2}")
@@ -132,9 +142,28 @@ async def ensure_cluster_channels(
     return existing[:count]
 
 
-async def cleanup_cluster_channels(guild, prefix: str, *, category_id: int | None = None, exclude_ids: set[int] | None = None):
+async def create_cluster_channels(
+    guild, prefix: str, category_id: int | None, count: int
+) -> List:
+    """Synchronously ensure up to 'count' cluster channels exist, returning the list of channels created in this call."""
+    created: List = []
+    # Refresh existing
+    existing = {ch.name: ch for ch in guild.voice_channels if ch.name.startswith(prefix)}
+    for i in range(1, count + 1):
+        name = f"{prefix}-{i}"
+        if name in existing:
+            continue
+        ch = await _create_channel(guild, name, category_id=category_id)
+        if ch:
+            created.append(ch)
+            existing[name] = ch
+    return created
+
+
+async def cleanup_cluster_channels(guild, prefix: str, *, category_id: int | None = None, exclude_ids: set[int] | None = None) -> int:
     # Only delete empty channels with our prefix, optionally scoped to a category, and not in the exclude list
     exclude_ids = exclude_ids or set()
+    deleted = 0
     for ch in list(guild.voice_channels):
         if not ch.name.startswith(prefix):
             continue
@@ -146,5 +175,7 @@ async def cleanup_cluster_channels(guild, prefix: str, *, category_id: int | Non
             try:
                 await ch.delete(reason="ProxChat cleanup")
                 print(f"[ProxBot] Deleted empty cluster channel '{ch.name}' (id={ch.id})")
+                deleted += 1
             except Exception as e:
                 print(f"[ProxBot] WARN: Failed to delete cluster channel '{ch.name}': {e}")
+    return deleted
