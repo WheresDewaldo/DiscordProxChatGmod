@@ -49,6 +49,16 @@ _creation_tasks: dict[str, asyncio.Task] = {}
 _last_attempt: dict[str, float] = {}
 
 
+async def _delete_channel(ch):
+    """Background delete a channel, with safe logging."""
+    try:
+        print(f"[ProxBot] cleanup: deleting empty cluster channel '{ch.name}' (id={ch.id})")
+        await ch.delete(reason="ProxChat cleanup: too many clusters")
+        print(f"[ProxBot] cleanup: deleted '{ch.name}'")
+    except Exception as e:
+        print(f"[ProxBot] WARN: Failed to delete cluster channel '{getattr(ch,'name',str(ch))}': {type(e).__name__}: {e}")
+
+
 async def _create_channel(guild, name: str, *, category_id: Optional[int] = None):
     """Background create of a voice channel; logs results and handles fallback with retries."""
     TIMEOUT = 30.0  # seconds per Discord API operation
@@ -219,6 +229,47 @@ async def ensure_cluster_channels(
         print(f"[ProxBot] ensure_cluster_channels: returning first {min(len(existing), count)}: {names}")
     except Exception:
         pass
+    
+    # --- Automatic cleanup of extra empty cluster channels beyond `count` ---
+    def _parse_index(ch_name: str, prefix: str) -> int:
+        try:
+            part = ch_name[len(prefix) + 1:]
+            return int(part)
+        except Exception:
+            return 0
+    
+    extra_channels: List = []
+    for ch in existing:
+        idx = _parse_index(ch.name, prefix)
+        if idx > count:
+            # if category_id specified, only consider channels in that category for deletion
+            if category_id is not None and getattr(ch, "category_id", None) != category_id:
+                continue
+            extra_channels.append((idx, ch))
+    # Sort extra channels descending by index (delete highest indices first)
+    extra_channels.sort(reverse=True, key=lambda t: t[0])
+    for idx, ch in extra_channels:
+        try:
+            # Only delete if empty and not currently being created
+            if len(ch.members) == 0:
+                name = ch.name
+                # if a creation task for this name is running, skip deletion
+                if name in _creation_tasks and not _creation_tasks[name].done():
+                    print(f"[ProxBot] cleanup: skipping deletion for '{name}' because creation is in-flight")
+                    continue
+                # avoid immediate delete of a channel we just tried to create very recently
+                last_attempt_time = _last_attempt.get(name, 0)
+                if time.time() - last_attempt_time < 20:
+                    print(f"[ProxBot] cleanup: skipping deletion for '{name}' (recently created/attempted)")
+                    continue
+                # schedule background delete
+                asyncio.create_task(_delete_channel(ch))
+            else:
+                print(f"[ProxBot] cleanup: not deleting '{ch.name}' because it has members")
+        except Exception as e:
+            print(f"[ProxBot] WARN: error during cleanup check for '{getattr(ch,'name',str(ch))}': {type(e).__name__}: {e}")
+    # --- END cleanup logic ---
+    
     return existing[:count]
 
 
