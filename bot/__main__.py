@@ -11,7 +11,7 @@ from discord import app_commands
 from .config import get_settings
 from .http_server import create_app, run_server
 from .discord_actions import ensure_in_channel, set_voice_policy
-from .proximity import Pos, cluster_positions, ensure_cluster_channels, cleanup_cluster_channels
+from .proximity import Pos, cluster_positions, assign_stable_labels, ensure_cluster_channels, cleanup_cluster_channels
 from .store import load_mapping, save_mapping
 import secrets
 import time
@@ -38,6 +38,7 @@ class ProxBot(discord.Client):
         # Hysteresis state
         self._last_cluster: Dict[int, int] = {}  # user_id -> cluster_index
         self._stable_count: Dict[int, int] = {}
+        self._labels: Dict[int, int] = {}  # user_id -> stable channel label from last batch
         self._last_move_ts: Dict[int, float] = {}  # per-user move cooldown
         self._last_cluster_move_ts: Dict[int, float] = {}  # per-cluster cooldown (cluster_idx -> ts)
         # Permission/cache flags
@@ -358,6 +359,7 @@ class ProxBot(discord.Client):
             print("[ProxBot] round_end: returning mapped users to Living and clearing mute/deafen")
             # Clear all hysteresis and cooldown state to prevent carryover into next round
             self._last_cluster.clear()
+            self._labels.clear()
             self._stable_count.clear()
             self._last_move_ts.clear()
             self._last_cluster_move_ts.clear()
@@ -424,9 +426,13 @@ class ProxBot(discord.Client):
                 # Nothing to do because no mapped users currently in voice
                 return
 
-            clusters = cluster_positions(pts, self.prox_radius, self.max_clusters)
+            clusters = cluster_positions(pts, self.prox_radius, self.max_clusters, prev_labels=self._labels)
             if not clusters:
                 return
+            # Stable channel labels: a group keeps its channel even when other groups split/merge
+            labels = assign_stable_labels(clusters, self._labels)
+            self._labels = {uid: labels[i] for i, members in enumerate(clusters) for uid in members}
+            needed_channels = max(labels) + 1
 
             # Ensure enough cluster channels exist (requires Manage Channels)
             if not self._can_manage_channels:
@@ -435,14 +441,14 @@ class ProxBot(discord.Client):
                     self._perm_warned = True
                 return
             try:
-                print(f"[ProxBot] Ensuring {len(clusters)} cluster channels with prefix '{self.cluster_prefix}'")
+                print(f"[ProxBot] Ensuring {needed_channels} cluster channels with prefix '{self.cluster_prefix}'")
                 # Prefer static channels if configured
                 static_ids = get_settings().PROX_CLUSTER_STATIC_IDS
                 channels = None
                 if static_ids:
                     ids = [int(x.strip()) for x in static_ids.split(",") if x.strip().isdigit()]
                     chans = []
-                    for cid in ids[:len(clusters)]:
+                    for cid in ids[:needed_channels]:
                         ch = self.guild.get_channel(cid)
                         if ch and isinstance(ch, discord.VoiceChannel):
                             chans.append(ch)
@@ -450,7 +456,7 @@ class ProxBot(discord.Client):
                         channels = chans
                         print(f"[ProxBot] Using static cluster channels: {[c.name for c in chans]}")
                 if channels is None:
-                    channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, len(clusters))
+                    channels = await ensure_cluster_channels(self.guild, self.cluster_prefix, self.cluster_category_id, needed_channels)
             except Exception as e:
                 if not self._perm_warned:
                     print(f"[ProxBot] Could not create/ensure cluster channels: {e}")
@@ -461,7 +467,7 @@ class ProxBot(discord.Client):
             user_to_cluster: Dict[int, int] = {}
             for idx, members in enumerate(clusters):
                 for uid in members:
-                    user_to_cluster[uid] = idx
+                    user_to_cluster[uid] = labels[idx]
 
             # Hysteresis and throttling
             now = time.time()

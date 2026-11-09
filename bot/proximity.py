@@ -22,27 +22,108 @@ def dist2(a: Pos, b: Pos) -> float:
 
 
 def cluster_positions(
-    points: Dict[int, Pos], radius: float, max_clusters: int
+    points: Dict[int, Pos],
+    radius: float,
+    max_clusters: int,
+    prev_labels: Optional[Dict[int, int]] = None,
+    hysteresis: float = 1.15,
 ) -> List[List[int]]:
-    # Simple greedy clustering: iterate points, assign to existing cluster if within radius of any member, else new cluster.
+    """Group players into voice clusters using single-linkage (connected components).
+
+    Two players share a cluster if there is a *chain* of players between them where
+    each hop is within ``radius``. Unlike the previous greedy "compare to first member"
+    approach this is order-independent: shuffling the input never changes the groups.
+
+    ``prev_labels`` (uid -> label from the last batch) enables hysteresis: two players
+    who were together last batch stay linked up to ``radius * hysteresis``, so a pair
+    hovering right at the edge of the radius doesn't flap between channels.
+
+    If there are more groups than ``max_clusters``, the two *closest* groups are merged
+    repeatedly (rather than dumping overflow into whichever cluster happened to be last).
+    """
+    if not points:
+        return []
+    uids = sorted(points)
+    parent = {u: u for u in uids}
+
+    def find(u: int) -> int:
+        while parent[u] != u:
+            parent[u] = parent[parent[u]]
+            u = parent[u]
+        return u
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
     r2 = radius * radius
-    clusters: List[List[int]] = []
-    for uid, p in points.items():
-        placed = False
-        for c in clusters:
-            # check against first member as centroid proxy
-            ref = points[c[0]]
-            if dist2(p, ref) <= r2:
-                c.append(uid)
-                placed = True
-                break
-        if not placed:
-            if len(clusters) >= max_clusters:
-                # Put into the last cluster to avoid creating more channels
-                clusters[-1].append(uid) if clusters else clusters.append([uid])
-            else:
-                clusters.append([uid])
+    sticky2 = r2 * hysteresis * hysteresis
+    prev = prev_labels or {}
+    for i, a in enumerate(uids):
+        pa = points[a]
+        for b in uids[i + 1:]:
+            d2 = dist2(pa, points[b])
+            if d2 <= r2:
+                union(a, b)
+            elif d2 <= sticky2 and a in prev and prev.get(a) == prev.get(b):
+                union(a, b)
+
+    groups: Dict[int, List[int]] = {}
+    for u in uids:
+        groups.setdefault(find(u), []).append(u)
+    clusters = sorted(groups.values(), key=lambda c: c[0])
+
+    cap = max(1, max_clusters)
+    while len(clusters) > cap:
+        best = None
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                d = min(dist2(points[a], points[b]) for a in clusters[i] for b in clusters[j])
+                if best is None or d < best[0]:
+                    best = (d, i, j)
+        _, i, j = best  # type: ignore[misc]
+        clusters[i] = sorted(clusters[i] + clusters[j])
+        del clusters[j]
     return clusters
+
+
+def assign_stable_labels(
+    clusters: List[List[int]], prev_labels: Optional[Dict[int, int]] = None
+) -> List[int]:
+    """Give each cluster a channel index that stays the same across batches.
+
+    Cluster order from ``cluster_positions`` is arbitrary, so naively using the list
+    index as the channel means that when one group splits or merges, *every other*
+    group can be renumbered and gets bounced to a different voice channel. Here each
+    new cluster inherits the label most of its members had last batch (largest overlap
+    wins), and brand-new groups take the lowest free label.
+    """
+    prev = prev_labels or {}
+    pairs: List[Tuple[int, int, int]] = []  # (overlap, cluster_idx, label)
+    for ci, members in enumerate(clusters):
+        counts: Dict[int, int] = {}
+        for u in members:
+            if u in prev:
+                counts[prev[u]] = counts.get(prev[u], 0) + 1
+        for label, n in counts.items():
+            pairs.append((n, ci, label))
+    # Highest overlap first; ties -> lower label, then lower cluster index (deterministic)
+    pairs.sort(key=lambda t: (-t[0], t[2], t[1]))
+    out: List[Optional[int]] = [None] * len(clusters)
+    used: set[int] = set()
+    for _, ci, label in pairs:
+        if out[ci] is None and label not in used:
+            out[ci] = label
+            used.add(label)
+    nxt = 0
+    for ci in range(len(clusters)):
+        if out[ci] is None:
+            while nxt in used:
+                nxt += 1
+            out[ci] = nxt
+            used.add(nxt)
+    return [int(x) for x in out]  # type: ignore[arg-type]
 
 
 _creation_tasks: dict[str, asyncio.Task] = {}
